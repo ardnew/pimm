@@ -8,10 +8,13 @@ import (
 
 type Library struct {
 	path       string
-	limitDepth bool
-	depth      uint
+	depthLimit uint
 	ignored    []string
 }
+
+const (
+	LibraryDepthUnlimited = 0
+)
 
 func NewLibrary(p string) (*Library, *ErrorCode) {
 
@@ -30,11 +33,11 @@ func NewLibrary(p string) (*Library, *ErrorCode) {
 		return nil, NewErrorCode(EInvalidLibrary, fmt.Sprintf("%s: %q", err, p))
 	}
 
-	return &Library{path: p, limitDepth: false, depth: 0, ignored: make([]string, 0)}, nil
+	return &Library{path: p, depthLimit: LibraryDepthUnlimited, ignored: make([]string, 0)}, nil
 }
 
 func (l *Library) String() string {
-	return fmt.Sprintf("%q:{ depth:%d ignored:%v }", l.path, l.depth, l.ignored)
+	return fmt.Sprintf("%q:{ depthLimit:%d ignored:%v }", l.path, l.depthLimit, l.ignored)
 }
 
 func (l *Library) Path() string {
@@ -45,20 +48,16 @@ func (l *Library) SetPath(p string) {
 	l.path = p
 }
 
-func (l *Library) LimitDepth() bool {
-	return l.limitDepth
+func (l *Library) IsDepthLimited() bool {
+	return LibraryDepthUnlimited != l.depthLimit
 }
 
-func (l *Library) SetLimitDepth(d bool) {
-	l.limitDepth = d
+func (l *Library) DepthLimit() uint {
+	return l.depthLimit
 }
 
-func (l *Library) Depth() uint {
-	return l.depth
-}
-
-func (l *Library) SetDepth(d uint) {
-	l.depth = d
+func (l *Library) SetDepthLimit(d uint) {
+	l.depthLimit = d
 }
 
 func (l *Library) Ignored() []string {
@@ -86,8 +85,8 @@ func (l *Library) walk(currPath string, depth uint) *ErrorCode {
 	switch {
 	case (mode & os.ModeDir) > 0:
 		// file is directory, walk its contents unless we are at max depth
-		if l.limitDepth && depth <= 0 {
-			return NewErrorCode(EDirDepth, fmt.Sprintf("limit=%d, %q", l.depth, currPath))
+		if l.IsDepthLimited() && depth > l.depthLimit {
+			return NewErrorCode(EDirDepth, fmt.Sprintf("exceeded limit=%d, skipping: %q", l.depthLimit, currPath))
 		}
 		dir, err := os.Open(currPath)
 		if nil != err {
@@ -99,14 +98,17 @@ func (l *Library) walk(currPath string, depth uint) *ErrorCode {
 			return NewErrorCode(EDirOpen, fmt.Sprintf("%s: %q", err, currPath))
 		}
 		for _, info := range contentInfo {
-			err := l.walk(path.Join(currPath, info.Name()), depth-1)
+			err := l.walk(path.Join(currPath, info.Name()), depth+1)
 			if nil != err {
 				WarnLog.Log(err)
 			}
 		}
 		return nil
 
-	case (mode & (os.ModeSymlink | os.ModeDevice | os.ModeNamedPipe | os.ModeSocket | os.ModeCharDevice)) > 0:
+	case (mode & os.ModeSymlink) > 0:
+		return NewErrorCode(EInvalidFile, fmt.Sprintf("not following symlinks, skipping: %q", currPath))
+
+	case (mode & (os.ModeDevice | os.ModeNamedPipe | os.ModeSocket | os.ModeCharDevice)) > 0:
 		// file is not a regular file, not supported
 		return NewErrorCode(EInvalidFile, fmt.Sprintf("%q", currPath))
 	}
@@ -119,7 +121,7 @@ func (l *Library) walk(currPath string, depth uint) *ErrorCode {
 
 func (l *Library) Scan() *ErrorCode {
 
-	err := l.walk(l.path, l.depth)
+	err := l.walk(l.path, 1)
 	if nil != err {
 		switch err.Code {
 		default:

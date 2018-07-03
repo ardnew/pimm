@@ -20,9 +20,11 @@ var (
 	EOK             = &ExitCode{0, "ok"}
 	EInvalidLibrary = &ExitCode{1, "invalid library"}
 	EDirOpen        = &ExitCode{2, "cannot read directory"}
-	EDirDepth       = &ExitCode{3, "exceeded directory depth limit"}
+	EDirDepth       = &ExitCode{3, "directory depth limited"}
 	EFileStat       = &ExitCode{4, "cannot stat file"}
 	EInvalidFile    = &ExitCode{5, "invalid file"}
+	EArgs           = &ExitCode{6, "invalid arguments"}
+	EUsage          = &ExitCode{99, "usage"}
 )
 
 func (c *ExitCode) Error() string {
@@ -47,33 +49,46 @@ const (
 )
 
 var (
+	RawLog  ConsoleLog
 	InfoLog ConsoleLog
 	WarnLog ConsoleLog
 	ErrLog  ConsoleLog
 )
 
 func init() {
+	RawLog = ConsoleLog{Logger: log.New(os.Stdout, "", 0)}
 	InfoLog = ConsoleLog{Logger: log.New(os.Stdout, "[ ] ", logFlags)}
 	WarnLog = ConsoleLog{Logger: log.New(os.Stderr, "[*] ", logFlags)}
 	ErrLog = ConsoleLog{Logger: log.New(os.Stderr, "[!] ", logFlags)}
 }
 
+func (l *ConsoleLog) output(s string) {
+	if 0 != l.Logger.Flags() {
+		l.Printf("| %s", s)
+	} else {
+		l.Print(s)
+	}
+}
+
 func (l *ConsoleLog) Log(v ...interface{}) {
 	s := fmt.Sprint(v...)
-	l.Printf("| %s", s)
+	l.output(s)
 }
 
 func (l *ConsoleLog) Logf(format string, v ...interface{}) {
 	s := fmt.Sprintf(format, v...)
-	l.Printf("| %s", s)
+	l.output(s)
 }
 
 func (l *ConsoleLog) Logln(v ...interface{}) {
 	s := fmt.Sprintln(v...)
-	l.Printf("| %s", s)
+	l.output(s)
 }
 
 func (l *ConsoleLog) Die(c *ErrorCode) {
-	l.Printf("| %s", error(c))
+	if EUsage != c.ExitCode {
+		s := fmt.Sprintf("%s", error(c))
+		l.output(s)
+	}
 	os.Exit(c.Code)
 }
