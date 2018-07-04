@@ -5,14 +5,33 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
 	"sync"
 )
 
+// globals initialized in Makefile
 var (
-	OptionColorLog bool
+	VERSION   string
+	REVISION  string
+	BUILDTIME string
 )
 
-func initOptions() *flag.FlagSet {
+type Option struct {
+	name  string
+	usage string
+	bool
+	int
+	uint
+	float64
+	string
+}
+
+type Options struct {
+	*flag.FlagSet
+	ColorLog Option
+}
+
+func initOptions() *Options {
 
 	defer func() {
 		if r := recover(); nil != r {
@@ -23,35 +42,37 @@ func initOptions() *flag.FlagSet {
 		}
 	}()
 
-	optionID := os.Args[0] // using application name by default
-	option := flag.NewFlagSet(optionID, flag.PanicOnError)
+	invokedName := path.Base(os.Args[0]) // using application name by default
+	options := &Options{
+		FlagSet: flag.NewFlagSet(invokedName, flag.PanicOnError),
+		ColorLog: Option{
+			name:  "log-color",
+			usage: "colorize messages in output log",
+			bool:  true},
+	}
 
-	option.BoolVar(&OptionColorLog, "log-color", true, "colorize messages in output log")
+	options.BoolVar(&options.ColorLog.bool, options.ColorLog.name, options.ColorLog.bool, options.ColorLog.usage)
 
-	option.SetOutput(ioutil.Discard)
-	option.Usage = func() {
-		option.SetOutput(os.Stderr)
-		RawLog.Logf("%s version ?", optionID)
+	options.SetOutput(ioutil.Discard)
+	options.Usage = func() {
+		options.SetOutput(os.Stderr)
+		RawLog.Logf("%s version %s-r%s (%s)", invokedName, VERSION, REVISION, BUILDTIME)
 		RawLog.Log()
-		option.PrintDefaults()
+		options.PrintDefaults()
 		RawLog.Log()
 	}
 
-	option.Parse(os.Args[1:])
+	options.Parse(os.Args[1:])
 
-	return option
+	return options
 }
 
-// prepare runtime, args, and parse command line
-func initLibrary() []*Library {
+func initLibrary(options *Options) []*Library {
 
-	var (
-		wg      sync.WaitGroup
-		library []*Library
-	)
+	var library []*Library
+	var wg sync.WaitGroup
 
-	CmdLine := initOptions()
-	fa := CmdLine.Args()
+	fa := options.Args()
 	lq := make(chan *Library, len(fa))
 
 	for _, p := range fa {
@@ -76,7 +97,9 @@ func initLibrary() []*Library {
 }
 
 func populateLibrary(library []*Library) {
+
 	var wg sync.WaitGroup
+
 	for _, l := range library {
 		wg.Add(1)
 		InfoLog.Logf("Scanning library: %s", l)
@@ -92,7 +115,9 @@ func populateLibrary(library []*Library) {
 }
 
 func main() {
-	library := initLibrary()
+
+	options := initOptions()
+	library := initLibrary(options)
 	if 0 == len(library) {
 		ErrLog.Die(NewErrorCode(EInvalidLibrary, "no libraries found"))
 	}
