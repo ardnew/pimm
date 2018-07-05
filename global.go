@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"sync"
 )
 
 type ExitCode struct {
@@ -24,7 +26,11 @@ var (
 	EFileStat       = &ExitCode{4, "cannot stat file"}
 	EInvalidFile    = &ExitCode{5, "invalid file"}
 	EArgs           = &ExitCode{6, "invalid arguments"}
+	EFileIgnore     = &ExitCode{7, "user-ignored file"}
+	EInvalidOption  = &ExitCode{8, "invalid user option"}
+	EFileHash       = &ExitCode{9, "failed to calculate hash"}
 	EUsage          = &ExitCode{99, "usage"}
+	EUnknown        = &ExitCode{255, "unknown error"}
 )
 
 func (c *ExitCode) Error() string {
@@ -41,32 +47,97 @@ func NewErrorCode(c *ExitCode, v ...interface{}) *ErrorCode {
 }
 
 type ConsoleLog struct {
+	isUTF8 bool
+	prefix map[bool]string
+	writer io.Writer
 	*log.Logger
+	sync.Mutex
 }
 
 const (
-	logFlags = log.Ldate | log.Ltime
+	logFlags     = log.Ldate | log.Ltime
+	logSeparator = '|'
 )
+
+const (
+	rawLogID = iota
+	infoLogID
+	warnLogID
+	errLogID
+	consoleLogCount
+)
+
+var consoleLogPrefix = [consoleLogCount]map[bool]string{
+	map[bool]string{false: "", true: ""},
+	map[bool]string{false: " = ", true: " ✔ "},
+	map[bool]string{false: " * ", true: " ⛔ "},
+	map[bool]string{false: " ! ", true: " ✖ "},
+}
+
+var consoleLog = [consoleLogCount]*ConsoleLog{
+	// RawLog:
+	&ConsoleLog{
+		isUTF8: false,
+		prefix: consoleLogPrefix[rawLogID],
+		writer: os.Stdout,
+		Logger: log.New(os.Stdout, consoleLogPrefix[rawLogID][false], 0),
+	},
+	// InfoLog:
+	&ConsoleLog{
+		isUTF8: false,
+		prefix: consoleLogPrefix[infoLogID],
+		writer: os.Stdout,
+		Logger: log.New(os.Stdout, consoleLogPrefix[infoLogID][false], logFlags),
+	},
+	// WarnLog:
+	&ConsoleLog{
+		isUTF8: false,
+		prefix: consoleLogPrefix[warnLogID],
+		writer: os.Stderr,
+		Logger: log.New(os.Stderr, consoleLogPrefix[warnLogID][false], logFlags),
+	},
+	// ErrLog:
+	&ConsoleLog{
+		isUTF8: false,
+		prefix: consoleLogPrefix[errLogID],
+		writer: os.Stderr,
+		Logger: log.New(os.Stderr, consoleLogPrefix[errLogID][false], logFlags),
+	},
+}
 
 var (
-	RawLog  ConsoleLog
-	InfoLog ConsoleLog
-	WarnLog ConsoleLog
-	ErrLog  ConsoleLog
+	RawLog  *ConsoleLog = consoleLog[rawLogID]
+	InfoLog *ConsoleLog = consoleLog[infoLogID]
+	WarnLog *ConsoleLog = consoleLog[warnLogID]
+	ErrLog  *ConsoleLog = consoleLog[errLogID]
 )
 
-func init() {
-	RawLog = ConsoleLog{Logger: log.New(os.Stdout, "", 0)}
-	InfoLog = ConsoleLog{Logger: log.New(os.Stdout, "[ ] ", logFlags)}
-	WarnLog = ConsoleLog{Logger: log.New(os.Stderr, "[*] ", logFlags)}
-	ErrLog = ConsoleLog{Logger: log.New(os.Stderr, "[!] ", logFlags)}
+func (l *ConsoleLog) SetUnicode(c bool) {
+	if l.isUTF8 != c {
+		l.Lock()
+		l.Logger = log.New(l.writer, l.prefix[c], l.Flags())
+		l.isUTF8 = c
+		l.Unlock()
+	}
+}
+
+func SetUnicodeLog(c bool) {
+	for _, l := range consoleLog {
+		l.SetUnicode(c)
+	}
 }
 
 func (l *ConsoleLog) output(s string) {
-	if 0 != l.Logger.Flags() {
-		l.Printf("| %s", s)
-	} else {
-		l.Print(s)
+	const (
+		DO_OUTPUT = true
+	)
+
+	if DO_OUTPUT {
+		if 0 != l.Logger.Flags() {
+			//l.Printf("%c %s\n", logSeparator, s)
+		} else {
+			//l.Print(s)
+		}
 	}
 }
 
