@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell"
@@ -19,25 +20,120 @@ func (key *LibSubdirKey) String() string {
 	return fmt.Sprintf("%s|%s", key.path, key.library)
 }
 
+type PimmView interface {
+	FocusKey() tcell.Key
+	HandleKey(*tview.Application, *tcell.EventKey) *tcell.EventKey
+}
+
+type PVTreeView struct{ *tview.TreeView }
+type PVTableView struct{ *tview.Table }
+type PVTextView struct{ *tview.TextView }
+
 type Layout struct {
 	app         *tview.Application
 	options     *Options
 	updateQueue *chan bool
 	mediaIndex  *map[string]*tview.TableCell
 	libIndex    *map[string]*tview.TreeNode
-	libTree     *tview.TreeView
-	mediaTable  *tview.Table
+	libTree     *PVTreeView
+	mediaTable  *PVTableView
+	logView     *PVTextView
 }
 
 const (
-	TreeNodeColorDir      = tcell.ColorGreen
-	TreeNodeColorDirEmpty = tcell.ColorWhite
+	TreeNodeColorSelected    = tcell.ColorGreen
+	TreeNodeColorNotSelected = tcell.ColorWhite
 )
 
 const (
 	DrawUpdateDuration = 100 * time.Millisecond
 	DrawCycleDuration  = 10 * DrawUpdateDuration
 )
+
+var (
+	app        *tview.Application
+	keyHandler = map[tcell.Key]PimmView{}
+)
+
+func appInputHandler(event *tcell.EventKey) *tcell.EventKey {
+
+	// if appInputHandler was called, then it was succesfully installed on the
+	// unit-visible "app" and is thus non-nil
+	view, handle := keyHandler[event.Key()]
+	if handle {
+		return view.HandleKey(app, event)
+	}
+
+	return event
+}
+
+func (view *PVTreeView) FocusKey() tcell.Key {
+	return tcell.KeyF1
+}
+
+func (view *PVTreeView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
+
+	key := event.Key()
+	switch key {
+	case view.FocusKey():
+		prevFocus := app.GetFocus()
+		if view.TreeView != prevFocus {
+			if nil != prevFocus {
+				prevFocus.Blur()
+			}
+			app.SetFocus(view)
+		}
+
+	case tcell.KeyF5:
+		node := view.GetCurrentNode()
+		node.SetColor(TreeNodeColorNotSelected)
+		switch ref := node.GetReference().(type) {
+		case *LibSubdirKey:
+			ref.layout.ShowMedia(ref)
+		}
+	}
+	return event
+}
+
+func (view *PVTableView) FocusKey() tcell.Key {
+	return tcell.KeyF2
+}
+
+func (view *PVTableView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
+
+	key := event.Key()
+	switch key {
+	case view.FocusKey():
+		prevFocus := app.GetFocus()
+		if view.Table != prevFocus {
+			if nil != prevFocus {
+				prevFocus.Blur()
+			}
+			app.SetFocus(view)
+		}
+	}
+	return event
+}
+
+func (view *PVTextView) FocusKey() tcell.Key {
+	return tcell.KeyF12
+}
+
+func (view *PVTextView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
+
+	key := event.Key()
+	switch key {
+	case view.FocusKey():
+		prevFocus := app.GetFocus()
+		if view.TextView != prevFocus {
+			if nil != prevFocus {
+				prevFocus.Blur()
+			}
+			app.SetFocus(view)
+		}
+	}
+	return event
+}
 
 // creates and initializes the tview primitives that will constitute the layout
 // of our primary view
@@ -46,7 +142,8 @@ func initUI(opt *Options) *Layout {
 	// the root tview object "app" coordinates all of the tview primitives with
 	// the tcell screen object, who in-turn coordinates that screen object with
 	// our actual terminal
-	app := tview.NewApplication()
+	app = tview.NewApplication()
+	app.SetInputCapture(appInputHandler)
 
 	// we create channel "updateQueue" to be polled periodically[1] by a lone
 	// wolf goroutine.
@@ -57,31 +154,35 @@ func initUI(opt *Options) *Layout {
 	// decided to use a tview.Table for displaying the most important view of
 	// this application -- the library media browser
 	mediaIndex := make(map[string]*tview.TableCell)
-	mediaTable := tview.NewTable()
+	mediaTable := &PVTableView{tview.NewTable()}
 	mediaTable.SetBorder(true)   // whole table
 	mediaTable.SetBorders(false) // inbetween cells
+	mediaTable.SetBackgroundColor(tcell.ColorBlack)
 	mediaTable.SetSelectable(true /*rows*/, false /*cols*/)
 	mediaTable.SetTitle(" Media ")
+	mediaTable.SetInputCapture(nil)
 
 	// created a tview.TreeView to present the libraries and the subdirs in a
 	// collapsable tree data structure mirroring a fs tree structure
 	libIndex := make(map[string]*tview.TreeNode)
-	libTree := tview.NewTreeView()
+	libTree := &PVTreeView{tview.NewTreeView()}
 	rootNode := tview.NewTreeNode("<ROOT>").SetColor(tcell.ColorRed).SetSelectable(false)
 	libTree.SetRoot(rootNode).SetCurrentNode(rootNode)
 	libTree.SetBorder(true).SetTitle(" Library ")
 	libTree.SetGraphics(true)
 	libTree.SetTopLevel(1)
-	libTree.SetSelectedFunc(libraryNodeSelected)
-	libTree.SetChangedFunc(libraryNodeChanged)
+	libTree.SetSelectedFunc(libTreeNodeSelected)
+	libTree.SetChangedFunc(libTreeNodeChanged)
+	libTree.SetInputCapture(nil)
 
-	logView := tview.NewTextView()
+	logView := &PVTextView{tview.NewTextView()}
 	logView.SetTitle(" Log ")
 	logView.SetBorder(true)
 	logView.SetDynamicColors(true)
 	logView.SetRegions(true)
 	logView.SetScrollable(true)
 	logView.SetWrap(false)
+	logView.SetInputCapture(nil)
 	setLogWriter(logView)
 
 	browseLayout := tview.NewFlex().SetDirection(tview.FlexColumn)
@@ -94,6 +195,11 @@ func initUI(opt *Options) *Layout {
 
 	app.SetRoot(mainLayout, true).SetFocus(libTree)
 
+	keyHandler[libTree.FocusKey()] = libTree
+	keyHandler[tcell.KeyF5] = libTree
+	keyHandler[mediaTable.FocusKey()] = mediaTable
+	keyHandler[logView.FocusKey()] = logView
+
 	layout := &Layout{
 		app:         app,
 		options:     opt,
@@ -102,6 +208,7 @@ func initUI(opt *Options) *Layout {
 		libIndex:    &libIndex,
 		libTree:     libTree,
 		mediaTable:  mediaTable,
+		logView:     logView,
 	}
 
 	go layout.DrawCycle()
@@ -115,7 +222,7 @@ func (y *Layout) DrawCycle() {
 	// multiple goroutines may post to the channel in a very short timespan.
 	// so instead of redrawing every time, notify the channel that an update
 	// is available, Draw() once, and then drain the queue
-	cycle := time.Tick(DrawCycleDuration)
+	//cycle := time.Tick(DrawCycleDuration)
 	update := time.Tick(DrawUpdateDuration)
 	for {
 		select {
@@ -134,11 +241,11 @@ func (y *Layout) DrawCycle() {
 				}
 			default:
 			}
-		case <-cycle:
-			// also perform unconditional draw updates at a regular interval to
-			// theoretically account for any changes i accidentally miss making
-			// an explicit request for -- on the incredibly low chance i mess up
-			y.app.Draw()
+		//case <-cycle:
+		// also perform unconditional draw updates at a regular interval to
+		// theoretically account for any changes i accidentally miss making
+		// an explicit request for -- on the incredibly low chance i mess up
+		//y.app.Draw()
 		default:
 		}
 	}
@@ -151,23 +258,20 @@ func updatePrefix(node *tview.TreeNode) {
 		text := path.Base(ref.path)
 		layout := ref.layout
 		isUTF8, isExpanded := layout.options.UTF8.bool, node.IsExpanded()
-		prefix := treeNodePrefixExpanded[isUTF8][isExpanded]
+		prefix := treeNodePrefixExpanded[isExpanded][isUTF8][false]
 		node.SetText(fmt.Sprintf("%s%s", prefix, text))
+		*layout.updateQueue <- true
 	}
 }
 
-func libraryNodeSelected(node *tview.TreeNode) {
+func libTreeNodeSelected(node *tview.TreeNode) {
 
 	node.SetExpanded(!node.IsExpanded())
 	updatePrefix(node)
 }
 
-func libraryNodeChanged(node *tview.TreeNode) {
+func libTreeNodeChanged(node *tview.TreeNode) {
 
-	switch ref := node.GetReference().(type) {
-	case *LibSubdirKey:
-		ref.layout.ShowMedia(ref)
-	}
 }
 
 func (y *Layout) AddLibraryNode(lib *Library, path, name, parent string) {
@@ -186,11 +290,11 @@ func (y *Layout) AddLibraryNode(lib *Library, path, name, parent string) {
 	index := *y.libIndex
 	if isRoot {
 		parentNode = y.libTree.GetRoot()
-		nodeColor = TreeNodeColorDir
+		nodeColor = TreeNodeColorSelected
 		nodeText = fmt.Sprintf("%s", name)
 	} else {
 		parentNode = index[parentKey.String()]
-		nodeColor = TreeNodeColorDirEmpty
+		nodeColor = TreeNodeColorNotSelected
 		nodeText = fmt.Sprintf("%s", name)
 	}
 
@@ -252,16 +356,27 @@ func (y *Layout) AddMedia(lib *Library, media *Media) {
 
 func (y *Layout) ShowMedia(key *LibSubdirKey) {
 
-	y.mediaTable = y.mediaTable.Clear()
+	y.mediaTable.Clear()
 
-	table := key.library.Media()
-	media, ok := table[key.path]
-
-	if !ok {
-		warnLog.Logf("failed to read media file index:\n\t%q", key.path)
+	index := *y.libIndex
+	node, ok := index[key.String()]
+	if ok {
+		node.SetColor(TreeNodeColorSelected)
 	}
 
-	for _, m := range media {
-		y.AddMediaTableRow(key.library, m)
+	table := key.library.Media()
+
+	//errLog.Logf("%q:", key.path)
+	//for m, t := range table {
+	//	errLog.Logf("  %q: %v", m, t)
+	//}
+
+	infoLog.Logf("refreshing library media: %q", key.path)
+	for path, content := range table {
+		if strings.HasPrefix(path, key.path) {
+			for _, m := range content {
+				y.AddMediaTableRow(key.library, m)
+			}
+		}
 	}
 }

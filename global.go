@@ -46,11 +46,16 @@ func NewErrorCode(c *ExitCode, v ...interface{}) *ErrorCode {
 	return &ErrorCode{s, c}
 }
 
+// outer map: false=ASCII, true=UTF8
+// inner map: false=Plain, true=Colored
+type StringContext map[bool]map[bool]string
+
 type ConsoleLog struct {
-	isUTF8 bool
-	prefix map[bool]string
-	writer io.Writer
-	update *chan bool
+	isUTF8  bool
+	isColor bool
+	prefix  StringContext
+	writer  io.Writer
+	update  *chan bool
 	*log.Logger
 	sync.Mutex
 }
@@ -68,55 +73,82 @@ const (
 	consoleLogCount
 )
 
-type UTF8OptionalString map[bool]string // false=ASCII, true=UTF8
+const (
+	scColor   = true
+	scNoColor = false
+	scUTF8    = true
+	scNoUTF8  = false
+)
 
 var MoonPhase = [8]rune{'🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'}
 
 var (
-	treeNodePrefixExpanded = map[bool]UTF8OptionalString{
-		false: {false: "-", true: "+"},
-		true:  {false: "▶ ", true: "▼ "},
+	treeNodePrefixExpanded = map[bool]StringContext{
+		false: { // collapsed
+			false: {false: "+", true: "+"},   // ASCII
+			true:  {false: "▶ ", true: "▶ "}, // UTF-8
+		},
+		true: { // expanded
+			false: {false: "-", true: "-"},   // ASCII
+			true:  {false: "▼ ", true: "▼ "}, // UTF-8
+		},
 	}
-	consoleLogPrefix = [consoleLogCount]UTF8OptionalString{
-		{false: "", true: ""},
-		{false: " = ", true: " [green]»[white] "},
-		{false: " * ", true: " [yellow]»[white] "},
-		{false: " ! ", true: " [red]×[white] "},
+	consoleLogPrefix = [consoleLogCount]StringContext{
+		{ // rawLogID
+			false: {false: "", true: ""}, // ASCII
+			true:  {false: "", true: ""}, // UTF-8
+		},
+		{ // infoLogID
+			false: {false: " = ", true: " = "},               // ASCII
+			true:  {false: " » ", true: " [green]»[white] "}, // UTF-8
+		},
+		{ // warnLogID
+			false: {false: " * ", true: " * "},                // ASCII
+			true:  {false: " » ", true: " [yellow]»[white] "}, // UTF-8
+		},
+		{ // errLogID
+			false: {false: " ! ", true: " ! "},             // ASCII
+			true:  {false: " × ", true: " [red]×[white] "}, // UTF-8
+		},
 	}
 )
 
 var consoleLog = [consoleLogCount]*ConsoleLog{
 	// RawLog:
 	&ConsoleLog{
-		isUTF8: false,
-		prefix: consoleLogPrefix[rawLogID],
-		writer: os.Stdout,
-		update: nil,
-		Logger: log.New(os.Stdout, consoleLogPrefix[rawLogID][false], 0),
+		isUTF8:  false,
+		isColor: false,
+		prefix:  consoleLogPrefix[rawLogID],
+		writer:  os.Stdout,
+		update:  nil,
+		Logger:  log.New(os.Stdout, consoleLogPrefix[rawLogID][false][false], 0),
 	},
 	// InfoLog:
 	&ConsoleLog{
-		isUTF8: false,
-		prefix: consoleLogPrefix[infoLogID],
-		writer: os.Stdout,
-		update: nil,
-		Logger: log.New(os.Stdout, consoleLogPrefix[infoLogID][false], logFlags),
+		isUTF8:  false,
+		isColor: false,
+		prefix:  consoleLogPrefix[infoLogID],
+		writer:  os.Stdout,
+		update:  nil,
+		Logger:  log.New(os.Stdout, consoleLogPrefix[infoLogID][false][false], logFlags),
 	},
 	// WarnLog:
 	&ConsoleLog{
-		isUTF8: false,
-		prefix: consoleLogPrefix[warnLogID],
-		writer: os.Stderr,
-		update: nil,
-		Logger: log.New(os.Stderr, consoleLogPrefix[warnLogID][false], logFlags),
+		isUTF8:  false,
+		isColor: false,
+		prefix:  consoleLogPrefix[warnLogID],
+		writer:  os.Stderr,
+		update:  nil,
+		Logger:  log.New(os.Stderr, consoleLogPrefix[warnLogID][false][false], logFlags),
 	},
 	// ErrLog:
 	&ConsoleLog{
-		isUTF8: false,
-		prefix: consoleLogPrefix[errLogID],
-		writer: os.Stderr,
-		update: nil,
-		Logger: log.New(os.Stderr, consoleLogPrefix[errLogID][false], logFlags),
+		isUTF8:  false,
+		isColor: false,
+		prefix:  consoleLogPrefix[errLogID],
+		writer:  os.Stderr,
+		update:  nil,
+		Logger:  log.New(os.Stderr, consoleLogPrefix[errLogID][false][false], logFlags),
 	},
 }
 
@@ -130,8 +162,9 @@ var (
 func (l *ConsoleLog) SetWriter(w io.Writer) {
 	if l.writer != w {
 		l.Lock()
-		l.Logger = log.New(w, l.Prefix(), l.Flags())
 		l.writer = w
+		l.isColor = !(os.Stdout == w || os.Stderr == w)
+		l.Logger = log.New(w, l.prefix[l.isUTF8][l.isColor], l.Flags())
 		l.Unlock()
 	}
 }
@@ -145,8 +178,8 @@ func setLogWriter(w io.Writer) {
 func (l *ConsoleLog) SetUnicode(c bool) {
 	if l.isUTF8 != c {
 		l.Lock()
-		l.Logger = log.New(l.writer, l.prefix[c], l.Flags())
 		l.isUTF8 = c
+		l.Logger = log.New(l.writer, l.prefix[c][l.isColor], l.Flags())
 		l.Unlock()
 	}
 }
