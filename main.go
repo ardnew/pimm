@@ -6,10 +6,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"regexp"
 	"sync"
-
-	"github.com/gdamore/tcell"
-	"github.com/rivo/tview"
 )
 
 // READ-ONLY (plz)! globals initialized in Makefile
@@ -34,7 +32,19 @@ type Option struct {
 type Options struct {
 	*flag.FlagSet
 	UsageHelp Option
-	UTF8Log   Option
+	UTF8      Option
+}
+
+func isLocaleUTF8() bool {
+	const LocaleEnvVar = "LANG"
+	localeLang := os.Getenv(LocaleEnvVar)
+	isUTF8, err := regexp.MatchString("\\.UTF-8$", localeLang)
+	if nil != err {
+		// don't use UTF-8 if locale is screwy enough to break this regex, seriously
+		warnLog.Logf("failed to parse env: %q: %s", LocaleEnvVar, err)
+		return false
+	}
+	return isUTF8
 }
 
 func initOptions() (options *Options, err error) {
@@ -51,34 +61,38 @@ func initOptions() (options *Options, err error) {
 		}
 	}()
 
+	isUTF8 := isLocaleUTF8()
+
 	// define the option properties that the command line parser shall recognize
 	invokedName := path.Base(os.Args[0]) // using application name by default
 	options = &Options{
 		FlagSet: flag.NewFlagSet(invokedName, flag.PanicOnError),
 		UsageHelp: Option{
 			name:  "help",
-			usage: "displays this helpful usage synopsis",
+			usage: "display this helpful usage synopsis!",
 			bool:  false,
 		},
-		UTF8Log: Option{
-			name:  "log-unicode",
-			usage: "enable Unicode (UTF-8) encodings in output log",
-			bool:  true,
+		UTF8: Option{
+			name: "unicode",
+			usage: "override Unicode (UTF-8) support. otherwise, this is determined\n" +
+				"automatically by checking your locale for a \"UTF-8\" tag in the\n" +
+				"LANG environment variable.",
+			bool: isUTF8,
 		},
 	}
 
 	// register the command line options we wan't to handle
 	options.BoolVar(&options.UsageHelp.bool, options.UsageHelp.name, options.UsageHelp.bool, options.UsageHelp.usage)
-	options.BoolVar(&options.UTF8Log.bool, options.UTF8Log.name, options.UTF8Log.bool, options.UTF8Log.usage)
+	options.BoolVar(&options.UTF8.bool, options.UTF8.name, options.UTF8.bool, options.UTF8.usage)
 
 	// the output provided with -help or when a option parse error occurred
 	options.SetOutput(ioutil.Discard)
 	options.Usage = func() {
 		options.SetOutput(os.Stderr)
-		RawLog.Logf("%s v%s (%s) [%s]", invokedName, VERSION, REVISION, BUILDTIME)
-		RawLog.Log()
+		rawLog.Logf("%s v%s (%s) [%s]", invokedName, VERSION, REVISION, BUILDTIME)
+		rawLog.Log()
 		options.PrintDefaults()
-		RawLog.Log()
+		rawLog.Log()
 	}
 
 	// yeaaaaaaah, now we do it
@@ -90,24 +104,24 @@ func initOptions() (options *Options, err error) {
 func initLibrary(options *Options) []*Library {
 
 	var library []*Library
-	var thrWait sync.WaitGroup
+	var gateKeeper sync.WaitGroup
 
 	libArgs := options.Args()
 	libQueue := make(chan *Library, len(libArgs))
 
 	for _, libPath := range libArgs {
-		thrWait.Add(1)
+		gateKeeper.Add(1)
 		go func(libPath string) {
-			defer thrWait.Done()
+			defer gateKeeper.Done()
 			lib, err := NewLibrary(libPath, make([]string, 0))
 			if nil != err {
-				ErrLog.Log(err.Reason)
+				errLog.Log(err.Reason)
 				return
 			}
 			libQueue <- lib
 		}(libPath)
 	}
-	thrWait.Wait()
+	gateKeeper.Wait()
 	close(libQueue)
 
 	// prep the library to start listening for media, adding them to the view
@@ -117,31 +131,31 @@ func initLibrary(options *Options) []*Library {
 	return library
 }
 
-func populateLibrary(library []*Library, tree *tview.TreeView) {
+func populateLibrary(library []*Library, layout *Layout) {
 
 	for _, lib := range library {
-		libNode := tview.NewTreeNode(lib.Name())
-		libNode.SetColor(tcell.ColorGreen)
-		libNode.SetSelectable(true)
-		libNode.SetExpanded(false)
-		tree.GetRoot().AddChild(libNode)
+		layout.AddLibrary(lib)
 
-		go func(lib *Library, libNode *tview.TreeNode) {
+		go func(lib *Library, layout *Layout) {
 			for {
-				media := <-lib.Media()
-				InfoLog.Logf("received media: %s", media)
-				mediaNode := tview.NewTreeNode(media.Name()).SetSelectable(true)
-				libNode.AddChild(mediaNode)
+				select {
+				case subdir := <-lib.Subdir():
+					infoLog.Logf("entering: %q", subdir)
+					layout.AddLibrarySubdir(lib, subdir)
+				case media := <-lib.MediaChan():
+					infoLog.Logf("discovered: %s", media)
+					layout.AddMedia(lib, media)
+				}
 			}
-		}(lib, libNode)
+		}(lib, layout)
 	}
 
 	for _, lib := range library {
-		InfoLog.Logf("Scanning library: %s", lib)
+		infoLog.Logf("scanning library: %s", lib)
 		go func(lib *Library) {
 			err := lib.Scan()
 			if nil != err {
-				ErrLog.Log(err)
+				errLog.Log(err)
 			}
 		}(lib)
 	}
@@ -151,46 +165,40 @@ func main() {
 
 	// parse options and command line arguments
 	options, ok := initOptions()
-	switch ok.(type) {
-	case *ErrorCode:
-		ErrLog.Die(ok.(*ErrorCode))
-	default:
-		ErrLog.Die(NewErrorCode(EArgs, fmt.Sprintf("%s", ok)))
-	case nil:
+	if nil != ok {
+		switch ok.(type) {
+		case *ErrorCode:
+			errLog.Die(ok.(*ErrorCode))
+		default:
+			errLog.Die(NewErrorCode(EArgs, fmt.Sprintf("%s", ok)))
+		}
 	}
 
 	// update program state for global optons
 	if options.UsageHelp.bool {
 		options.Usage()
-		ErrLog.Die(NewErrorCode(EUsage))
+		errLog.Die(NewErrorCode(EUsage))
 	}
-	SetUnicodeLog(options.UTF8Log.bool)
-
-	// prep the treeview for displaying our media
-	root := tview.NewTreeNode("Library").SetColor(tcell.ColorRed).SetSelectable(false)
-	tree := tview.NewTreeView().SetRoot(root).SetCurrentNode(root)
-	tree.SetSelectedFunc(
-		func(node *tview.TreeNode) {
-			if c := node.GetChildren(); len(c) > 0 {
-				node.SetExpanded(!node.IsExpanded())
-			}
-		})
+	setLogUnicode(options.UTF8.bool)
 
 	// remaining arguments are considered paths to libraries; verify the paths
 	// before assuming valid ones exist for traversal
 	library := initLibrary(options)
 	if 0 == len(library) {
-		ErrLog.Die(NewErrorCode(EInvalidLibrary, "no libraries found"))
+		errLog.Die(NewErrorCode(EInvalidLibrary, "no libraries found"))
 	}
+
+	// prep the UI components for population
+	layout := initUI(options)
 
 	// provided libraries exist and are readable, begin scanning
-	populateLibrary(library, tree)
-	InfoLog.Log("libraries ready")
+	populateLibrary(library, layout)
+	infoLog.Log("libraries ready")
 
 	// launch the terminal UI runtime
-	if err := tview.NewApplication().SetRoot(tree, true).Run(); err != nil {
-		InfoLog.Die(NewErrorCode(EUnknown, err))
+	if err := layout.app.Run(); err != nil {
+		infoLog.Die(NewErrorCode(EUnknown, err))
 	}
 
-	InfoLog.Die(NewErrorCode(EOK, "have a nice day!"))
+	infoLog.Die(NewErrorCode(EOK, "have a nice day!"))
 }

@@ -13,7 +13,9 @@ type Library struct {
 	name       string
 	depthLimit uint
 	ignored    []string
-	media      chan *Media
+	subdir     chan string
+	mediaChan  chan *Media
+	media      map[string][]*Media
 }
 
 const (
@@ -50,7 +52,9 @@ func NewLibrary(libName string, ignore []string) (*Library, *ErrorCode) {
 		name:       path.Base(libPath),
 		depthLimit: LibraryDepthUnlimited,
 		ignored:    ignore,
-		media:      make(chan *Media),
+		subdir:     make(chan string),
+		mediaChan:  make(chan *Media),
+		media:      make(map[string][]*Media),
 	}, nil
 }
 
@@ -103,11 +107,19 @@ func (l *Library) AddIgnored(i ...string) {
 	l.ignored = append(l.ignored, i...)
 }
 
-func (l *Library) Media() chan *Media {
+func (l *Library) Subdir() chan string {
+	return l.subdir
+}
+
+func (l *Library) MediaChan() chan *Media {
+	return l.mediaChan
+}
+
+func (l *Library) Media() map[string][]*Media {
 	return l.media
 }
 
-func (l *Library) walk(currPath string, depth uint) *ErrorCode {
+func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 
 	// TODO: don't continue if file matches an ignore pattern
 	/*
@@ -152,10 +164,15 @@ func (l *Library) walk(currPath string, depth uint) *ErrorCode {
 		if nil != err {
 			return NewErrorCode(EDirOpen, fmt.Sprintf("%s: %q", err, relPath))
 		}
+		// don't add the library root as a subdir to itself
+		if depth > 1 {
+			l.subdir <- currPath
+		}
+		l.media[currPath] = []*Media{}
 		for _, info := range contentInfo {
-			err := l.walk(path.Join(currPath, info.Name()), depth+1)
+			err := l.Walk(path.Join(currPath, info.Name()), depth+1)
 			if nil != err {
-				WarnLog.Log(err)
+				warnLog.Log(err)
 			}
 		}
 		return nil
@@ -169,22 +186,25 @@ func (l *Library) walk(currPath string, depth uint) *ErrorCode {
 	}
 
 	// if we made it here, we have a regular file. add it as a media candidate
-	media, ec := NewMedia(currPath)
-	if nil != ec {
-		return ec
+	media, errCode := NewMedia(fileInfo, currPath)
+	if nil != errCode {
+		return errCode
 	}
-	l.media <- media
+
+	mediaDir := path.Dir(currPath)
+	l.media[mediaDir] = append(l.media[mediaDir], media)
+	l.mediaChan <- media
 
 	return nil
 }
 
 func (l *Library) Scan() *ErrorCode {
 
-	err := l.walk(l.path, 1)
+	err := l.Walk(l.path, 1)
 	if nil != err {
 		switch err.Code {
 		default:
-			InfoLog.Log("walk(%q): %s", l.path, err)
+			infoLog.Log("walk(%q): %s", l.path, err)
 		}
 		return err
 	}

@@ -50,13 +50,14 @@ type ConsoleLog struct {
 	isUTF8 bool
 	prefix map[bool]string
 	writer io.Writer
+	update *chan bool
 	*log.Logger
 	sync.Mutex
 }
 
 const (
 	logFlags     = log.Ldate | log.Ltime
-	logSeparator = '|'
+	logSeparator = "| "
 )
 
 const (
@@ -67,12 +68,22 @@ const (
 	consoleLogCount
 )
 
-var consoleLogPrefix = [consoleLogCount]map[bool]string{
-	map[bool]string{false: "", true: ""},
-	map[bool]string{false: " = ", true: " ✔ "},
-	map[bool]string{false: " * ", true: " ⛔ "},
-	map[bool]string{false: " ! ", true: " ✖ "},
-}
+type UTF8OptionalString map[bool]string // false=ASCII, true=UTF8
+
+var MoonPhase = [8]rune{'🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'}
+
+var (
+	treeNodePrefixExpanded = map[bool]UTF8OptionalString{
+		false: {false: "-", true: "+"},
+		true:  {false: "▶ ", true: "▼ "},
+	}
+	consoleLogPrefix = [consoleLogCount]UTF8OptionalString{
+		{false: "", true: ""},
+		{false: " = ", true: " [green]»[white] "},
+		{false: " * ", true: " [yellow]»[white] "},
+		{false: " ! ", true: " [red]×[white] "},
+	}
+)
 
 var consoleLog = [consoleLogCount]*ConsoleLog{
 	// RawLog:
@@ -80,6 +91,7 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isUTF8: false,
 		prefix: consoleLogPrefix[rawLogID],
 		writer: os.Stdout,
+		update: nil,
 		Logger: log.New(os.Stdout, consoleLogPrefix[rawLogID][false], 0),
 	},
 	// InfoLog:
@@ -87,6 +99,7 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isUTF8: false,
 		prefix: consoleLogPrefix[infoLogID],
 		writer: os.Stdout,
+		update: nil,
 		Logger: log.New(os.Stdout, consoleLogPrefix[infoLogID][false], logFlags),
 	},
 	// WarnLog:
@@ -94,6 +107,7 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isUTF8: false,
 		prefix: consoleLogPrefix[warnLogID],
 		writer: os.Stderr,
+		update: nil,
 		Logger: log.New(os.Stderr, consoleLogPrefix[warnLogID][false], logFlags),
 	},
 	// ErrLog:
@@ -101,16 +115,32 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isUTF8: false,
 		prefix: consoleLogPrefix[errLogID],
 		writer: os.Stderr,
+		update: nil,
 		Logger: log.New(os.Stderr, consoleLogPrefix[errLogID][false], logFlags),
 	},
 }
 
 var (
-	RawLog  *ConsoleLog = consoleLog[rawLogID]
-	InfoLog *ConsoleLog = consoleLog[infoLogID]
-	WarnLog *ConsoleLog = consoleLog[warnLogID]
-	ErrLog  *ConsoleLog = consoleLog[errLogID]
+	rawLog  *ConsoleLog = consoleLog[rawLogID]
+	infoLog *ConsoleLog = consoleLog[infoLogID]
+	warnLog *ConsoleLog = consoleLog[warnLogID]
+	errLog  *ConsoleLog = consoleLog[errLogID]
 )
+
+func (l *ConsoleLog) SetWriter(w io.Writer) {
+	if l.writer != w {
+		l.Lock()
+		l.Logger = log.New(w, l.Prefix(), l.Flags())
+		l.writer = w
+		l.Unlock()
+	}
+}
+
+func setLogWriter(w io.Writer) {
+	for _, l := range consoleLog {
+		l.SetWriter(w)
+	}
+}
 
 func (l *ConsoleLog) SetUnicode(c bool) {
 	if l.isUTF8 != c {
@@ -121,45 +151,63 @@ func (l *ConsoleLog) SetUnicode(c bool) {
 	}
 }
 
-func SetUnicodeLog(c bool) {
+func setLogUnicode(c bool) {
 	for _, l := range consoleLog {
 		l.SetUnicode(c)
 	}
 }
 
-func (l *ConsoleLog) output(s string) {
-	const (
-		DO_OUTPUT = true
-	)
+func (l *ConsoleLog) setUpdate(u *chan bool) {
+	if l.update != u {
+		l.Lock()
+		l.update = u
+		l.Unlock()
+	}
+}
 
-	if DO_OUTPUT {
-		if 0 != l.Logger.Flags() {
-			//l.Printf("%c %s\n", logSeparator, s)
-		} else {
-			//l.Print(s)
-		}
+func setLogUpdate(u *chan bool) {
+	for _, l := range consoleLog {
+		l.setUpdate(u)
+	}
+}
+
+func (l *ConsoleLog) Raw(s string) {
+	if true {
+		l.Print(s)
+		// the following is causing serious input lag
+		//if nil != l.update {
+		//	*l.update <- true
+		//}
+	}
+}
+
+func (l *ConsoleLog) Output(s string) {
+	if l != rawLog {
+		l.Raw(fmt.Sprintf("%s%s", logSeparator, s))
+	} else {
+		l.Raw(s)
 	}
 }
 
 func (l *ConsoleLog) Log(v ...interface{}) {
 	s := fmt.Sprint(v...)
-	l.output(s)
+	l.Output(s)
 }
 
 func (l *ConsoleLog) Logf(format string, v ...interface{}) {
 	s := fmt.Sprintf(format, v...)
-	l.output(s)
+	l.Output(s)
 }
 
 func (l *ConsoleLog) Logln(v ...interface{}) {
 	s := fmt.Sprintln(v...)
-	l.output(s)
+	l.Output(s)
 }
 
 func (l *ConsoleLog) Die(c *ErrorCode) {
 	if EUsage != c.ExitCode {
 		s := fmt.Sprintf("%s", error(c))
-		l.output(s)
+		l.Output(s)
 	}
 	os.Exit(c.Code)
 }
