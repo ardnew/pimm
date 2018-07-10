@@ -55,7 +55,6 @@ type ConsoleLog struct {
 	isColor bool
 	prefix  StringContext
 	writer  io.Writer
-	update  *chan bool
 	*log.Logger
 	sync.Mutex
 }
@@ -120,7 +119,6 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isColor: false,
 		prefix:  consoleLogPrefix[rawLogID],
 		writer:  os.Stdout,
-		update:  nil,
 		Logger:  log.New(os.Stdout, consoleLogPrefix[rawLogID][false][false], 0),
 	},
 	// InfoLog:
@@ -129,7 +127,6 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isColor: false,
 		prefix:  consoleLogPrefix[infoLogID],
 		writer:  os.Stdout,
-		update:  nil,
 		Logger:  log.New(os.Stdout, consoleLogPrefix[infoLogID][false][false], logFlags),
 	},
 	// WarnLog:
@@ -138,7 +135,6 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isColor: false,
 		prefix:  consoleLogPrefix[warnLogID],
 		writer:  os.Stderr,
-		update:  nil,
 		Logger:  log.New(os.Stderr, consoleLogPrefix[warnLogID][false][false], logFlags),
 	},
 	// ErrLog:
@@ -147,7 +143,6 @@ var consoleLog = [consoleLogCount]*ConsoleLog{
 		isColor: false,
 		prefix:  consoleLogPrefix[errLogID],
 		writer:  os.Stderr,
-		update:  nil,
 		Logger:  log.New(os.Stderr, consoleLogPrefix[errLogID][false][false], logFlags),
 	},
 }
@@ -190,27 +185,9 @@ func setLogUnicode(c bool) {
 	}
 }
 
-func (l *ConsoleLog) setUpdate(u *chan bool) {
-	if l.update != u {
-		l.Lock()
-		l.update = u
-		l.Unlock()
-	}
-}
-
-func setLogUpdate(u *chan bool) {
-	for _, l := range consoleLog {
-		l.setUpdate(u)
-	}
-}
-
 func (l *ConsoleLog) Raw(s string) {
 	if true {
 		l.Print(s)
-		// the following is causing serious input lag
-		//if nil != l.update {
-		//	*l.update <- true
-		//}
 	}
 }
 

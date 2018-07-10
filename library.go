@@ -8,14 +8,14 @@ import (
 )
 
 type Library struct {
-	workingDir string
-	path       string
-	name       string
-	depthLimit uint
-	ignored    []string
-	subdir     chan string
-	mediaChan  chan *Media
-	media      map[string][]*Media
+	workingDir string              // user's $PWD
+	path       string              // absolute path to library
+	name       string              // logical filename portion of path
+	depthLimit uint                // recursive traversal depth
+	ignored    []string            // patterns of ignored directories
+	media      map[string][]*Media // map of each subdirectory to its file content
+	sigDir     chan string         // subdirectory discovery
+	sigMedia   chan *Media         // media discovery
 }
 
 const (
@@ -52,9 +52,9 @@ func NewLibrary(libName string, ignore []string) (*Library, *ErrorCode) {
 		name:       path.Base(libPath),
 		depthLimit: LibraryDepthUnlimited,
 		ignored:    ignore,
-		subdir:     make(chan string),
-		mediaChan:  make(chan *Media),
 		media:      make(map[string][]*Media),
+		sigDir:     make(chan string),
+		sigMedia:   make(chan *Media),
 	}, nil
 }
 
@@ -107,32 +107,24 @@ func (l *Library) AddIgnored(i ...string) {
 	l.ignored = append(l.ignored, i...)
 }
 
-func (l *Library) Subdir() chan string {
-	return l.subdir
-}
-
-func (l *Library) MediaChan() chan *Media {
-	return l.mediaChan
-}
-
 func (l *Library) Media() map[string][]*Media {
 	return l.media
+}
+
+func (l *Library) SigDir() chan string {
+	return l.sigDir
+}
+
+func (l *Library) SigMedia() chan *Media {
+	return l.sigMedia
 }
 
 func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 
 	// TODO: don't continue if file matches an ignore pattern
-	/*
-		for _, p := range l.Ignored() {
-			match, err := filepath.Match(p, currPath)
-			if nil != err {
-				return NewErrorCode(EInvalidOption, fmt.Sprintf("invalid match pattern=%q skipping: %q", p, currPath))
-			}
-			if match {
-				return NewErrorCode(EFileIgnore, fmt.Sprintf("ignore pattern=%q skipping: %q", p, currPath))
-			}
-		}
-	*/
+	// ...
+
+	currDir := path.Dir(currPath)
 
 	// get a path to the library relative to current working dir (useful for
 	// displaying diagnostic info to the user)
@@ -164,10 +156,7 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 		if nil != err {
 			return NewErrorCode(EDirOpen, fmt.Sprintf("%s: %q", err, relPath))
 		}
-		// don't add the library root as a subdir to itself
-		if depth > 1 {
-			l.subdir <- currPath
-		}
+
 		l.media[currPath] = []*Media{}
 		for _, info := range contentInfo {
 			err := l.Walk(path.Join(currPath, info.Name()), depth+1)
@@ -191,9 +180,8 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 		return errCode
 	}
 
-	mediaDir := path.Dir(currPath)
-	l.media[mediaDir] = append(l.media[mediaDir], media)
-	l.mediaChan <- media
+	l.media[currDir] = append(l.media[currDir], media)
+	l.sigMedia <- media
 
 	return nil
 }

@@ -10,14 +10,22 @@ import (
 	"github.com/rivo/tview"
 )
 
-type LibSubdirKey struct {
+type LibDirKey struct {
 	layout  *Layout
 	path    string
 	library *Library
 }
 
-func (key *LibSubdirKey) String() string {
+func (key *LibDirKey) String() string {
 	return fmt.Sprintf("%s|%s", key.path, key.library)
+}
+
+func (key *LibDirKey) Node() *tview.TreeNode {
+	index := *key.layout.libIndex
+	if node, ok := index[key.String()]; ok {
+		return node
+	}
+	return nil
 }
 
 type PimmView interface {
@@ -33,6 +41,7 @@ type Layout struct {
 	app         *tview.Application
 	options     *Options
 	updateQueue *chan bool
+	selectedKey *LibDirKey
 	mediaIndex  *map[string]*tview.TableCell
 	libIndex    *map[string]*tview.TreeNode
 	libTree     *PVTreeView
@@ -86,10 +95,11 @@ func (view *PVTreeView) HandleKey(app *tview.Application, event *tcell.EventKey)
 
 	case tcell.KeyF5:
 		node := view.GetCurrentNode()
-		node.SetColor(TreeNodeColorNotSelected)
 		switch ref := node.GetReference().(type) {
-		case *LibSubdirKey:
-			ref.layout.ShowMedia(ref)
+		case *LibDirKey:
+			go func(r *LibDirKey) {
+				r.layout.ShowMedia(r)
+			}(ref)
 		}
 	}
 	return event
@@ -149,7 +159,7 @@ func initUI(opt *Options) *Layout {
 	// wolf goroutine.
 	//   NOTE[1]: periodically means polled every "DrawUpdateDuration" (above)
 	updateQueue := make(chan bool)
-	setLogUpdate(&updateQueue)
+	//setLogUpdate(&updateQueue)
 
 	// decided to use a tview.Table for displaying the most important view of
 	// this application -- the library media browser
@@ -166,7 +176,7 @@ func initUI(opt *Options) *Layout {
 	// collapsable tree data structure mirroring a fs tree structure
 	libIndex := make(map[string]*tview.TreeNode)
 	libTree := &PVTreeView{tview.NewTreeView()}
-	rootNode := tview.NewTreeNode("<ROOT>").SetColor(tcell.ColorRed).SetSelectable(false)
+	rootNode := tview.NewTreeNode("<ROOT>")
 	libTree.SetRoot(rootNode).SetCurrentNode(rootNode)
 	libTree.SetBorder(true).SetTitle(" Library ")
 	libTree.SetGraphics(true)
@@ -186,12 +196,12 @@ func initUI(opt *Options) *Layout {
 	setLogWriter(logView)
 
 	browseLayout := tview.NewFlex().SetDirection(tview.FlexColumn)
-	browseLayout = browseLayout.AddItem(libTree, 0, 1, false)
-	browseLayout = browseLayout.AddItem(mediaTable, 0, 3, false)
+	browseLayout.AddItem(libTree, 0, 1, false)
+	browseLayout.AddItem(mediaTable, 0, 3, false)
 
 	mainLayout := tview.NewFlex().SetDirection(tview.FlexRow)
-	mainLayout = mainLayout.AddItem(browseLayout, 0, 3, false)
-	mainLayout = mainLayout.AddItem(logView, 0, 1, false)
+	mainLayout.AddItem(browseLayout, 0, 3, false)
+	mainLayout.AddItem(logView, 0, 1, false)
 
 	app.SetRoot(mainLayout, true).SetFocus(libTree)
 
@@ -210,6 +220,14 @@ func initUI(opt *Options) *Layout {
 		mediaTable:  mediaTable,
 		logView:     logView,
 	}
+
+	//	rootKey := &LibDirKey{layout, "/", nil}
+	//	rootNode.SetColor(TreeNodeColorNotSelected)
+	//	rootNode.SetSelectable(true)
+	//	rootNode.SetExpanded(true)
+	//	rootNode.SetReference(rootKey)
+	//	updatePrefix(rootNode)
+	//	libIndex[rootKey.String()] = rootNode
 
 	go layout.DrawCycle()
 
@@ -254,7 +272,7 @@ func (y *Layout) DrawCycle() {
 func updatePrefix(node *tview.TreeNode) {
 
 	switch ref := node.GetReference().(type) {
-	case *LibSubdirKey:
+	case *LibDirKey:
 		text := path.Base(ref.path)
 		layout := ref.layout
 		isUTF8, isExpanded := layout.options.UTF8.bool, node.IsExpanded()
@@ -276,37 +294,29 @@ func libTreeNodeChanged(node *tview.TreeNode) {
 
 func (y *Layout) AddLibraryNode(lib *Library, path, name, parent string) {
 
-	var (
-		parentNode *tview.TreeNode
-		nodeColor  tcell.Color
-		nodeText   string
-	)
+	var parentNode *tview.TreeNode
 
 	isRoot := len(parent) == 0
 
-	parentKey := &LibSubdirKey{y, parent, lib}
-	key := &LibSubdirKey{y, path, lib}
-
-	index := *y.libIndex
 	if isRoot {
 		parentNode = y.libTree.GetRoot()
-		nodeColor = TreeNodeColorSelected
-		nodeText = fmt.Sprintf("%s", name)
 	} else {
-		parentNode = index[parentKey.String()]
-		nodeColor = TreeNodeColorNotSelected
-		nodeText = fmt.Sprintf("%s", name)
+		parentKey := &LibDirKey{y, parent, lib}
+		parentNode = parentKey.Node()
 	}
 
+	key := &LibDirKey{y, path, lib}
+	nodeText := fmt.Sprintf("%s", name)
 	node := tview.NewTreeNode(nodeText)
-	node.SetColor(nodeColor)
+	node.SetColor(TreeNodeColorNotSelected)
 	node.SetSelectable(true)
 	node.SetExpanded(isRoot)
 	node.SetReference(key)
 	updatePrefix(node)
 
-	parentNode.AddChild(node)
+	index := *y.libIndex
 	index[key.String()] = node
+	parentNode.AddChild(node)
 
 	*y.updateQueue <- true
 }
@@ -354,22 +364,24 @@ func (y *Layout) AddMedia(lib *Library, media *Media) {
 	}
 }
 
-func (y *Layout) ShowMedia(key *LibSubdirKey) {
+func (y *Layout) ShowMedia(key *LibDirKey) {
 
 	y.mediaTable.Clear()
 
-	index := *y.libIndex
-	node, ok := index[key.String()]
-	if ok {
+	// unselect previous node
+	if prevKey := y.selectedKey; nil != prevKey {
+		if node := prevKey.Node(); nil != node {
+			node.SetColor(TreeNodeColorNotSelected)
+		}
+	}
+
+	// select current node
+	if node := key.Node(); nil != node {
+		y.selectedKey = key
 		node.SetColor(TreeNodeColorSelected)
 	}
 
 	table := key.library.Media()
-
-	//errLog.Logf("%q:", key.path)
-	//for m, t := range table {
-	//	errLog.Logf("  %q: %v", m, t)
-	//}
 
 	infoLog.Logf("refreshing library media: %q", key.path)
 	for path, content := range table {

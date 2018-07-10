@@ -139,10 +139,10 @@ func populateLibrary(library []*Library, layout *Layout) {
 		go func(lib *Library, layout *Layout) {
 			for {
 				select {
-				case subdir := <-lib.Subdir():
+				case subdir := <-lib.SigDir():
 					infoLog.Logf("entering: %q", subdir)
 					layout.AddLibrarySubdir(lib, subdir)
-				case media := <-lib.MediaChan():
+				case media := <-lib.SigMedia():
 					infoLog.Logf("discovered: %s", media)
 					layout.AddMedia(lib, media)
 				}
@@ -189,15 +189,21 @@ func main() {
 	}
 
 	// prep the UI components for population
-	layout := initUI(options)
+	//	layout := initUI(options)
+	//
+	//	// provided libraries exist and are readable, begin scanning
+	//	populateLibrary(library, layout)
+	//	infoLog.Log("libraries ready")
+	//
+	//	// launch the terminal UI runtime
+	//	if err := layout.app.Run(); err != nil {
+	//		infoLog.Die(NewErrorCode(EUnknown, err))
+	//	}
 
-	// provided libraries exist and are readable, begin scanning
-	populateLibrary(library, layout)
-	infoLog.Log("libraries ready")
+	UI := NewUI(options)
 
-	// launch the terminal UI runtime
-	if err := layout.app.Run(); err != nil {
-		infoLog.Die(NewErrorCode(EUnknown, err))
+	if err := UI.app.Run(); err != nil {
+		errLog.Die(NewErrorCode(EUnknown, err))
 	}
 
 	infoLog.Die(NewErrorCode(EOK, "have a nice day!"))
