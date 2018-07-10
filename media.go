@@ -19,17 +19,17 @@ type Media struct {
 	hash  uint64
 }
 
-func NewMedia(i os.FileInfo, p string) (*Media, *ErrorCode) {
+func NewMedia(info os.FileInfo, absPath string) (*Media, *ErrorCode) {
 
-	f, err := os.Open(p)
+	f, err := os.Open(absPath)
 	if nil != err {
-		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to open file for hashing: %q", p))
+		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to open file for hashing: %q", absPath))
 	}
 	defer f.Close()
 
 	b, err := ioutil.ReadAll(f)
 	if nil != err {
-		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to compute file hash: %q", p))
+		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to compute file hash: %q", absPath))
 	}
 
 	// TBD: spawn the checsum calculation off on its own
@@ -37,18 +37,18 @@ func NewMedia(i os.FileInfo, p string) (*Media, *ErrorCode) {
 	go func(b []byte) {
 		done <- xxhash.Sum64(b)
 	}(b)
-	h := <-done
+	hash := <-done
 
-	d := path.Dir(p)
-	n := path.Base(p)
+	dir := path.Dir(absPath)
+	name := path.Base(absPath)
 
 	return &Media{
-		dir:   d,
-		name:  n,
-		path:  p,
-		size:  i.Size(),
-		mtime: i.ModTime().Local(),
-		hash:  h,
+		dir:   dir,
+		name:  name,
+		path:  absPath,
+		size:  info.Size(),
+		mtime: info.ModTime().Local(),
+		hash:  hash,
 	}, nil
 }
 

@@ -5,42 +5,54 @@ import (
 	"github.com/rivo/tview"
 )
 
+type LibraryView struct {
+	*tview.TreeView
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+}
+
+type MediaView struct {
+	*tview.Table
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+}
+
+type MediaDetailView struct {
+	*tview.Form
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+}
+
+type PlaylistView struct {
+	*tview.List
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+}
+
+type LogView struct {
+	*tview.TextView
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+}
+
+type UIInputHandler func(event *tcell.EventKey, setFocus func(p tview.Primitive))
+
 type MediaRef struct {
 	library       *Library
 	media         *Media
 	libraryNode   *tview.TreeNode
 	mediaCell     *tview.TableCell
 	playlistIndex int
-}
-
-type LibraryView struct {
-	*tview.TreeView
-	container *tview.Flex
-	isVisible bool
-}
-
-type MediaView struct {
-	*tview.Table
-	container *tview.Flex
-	isVisible bool
-}
-
-type PlaylistView struct {
-	*tview.List
-	container *tview.Flex
-	isVisible bool
-}
-
-type LogView struct {
-	*tview.TextView
-	container *tview.Flex
-	isVisible bool
-}
-
-type UIView interface {
-	FocusKey() tcell.Key
-	SetVisible(bool)
-	HandleKey(*tview.Application, *tcell.EventKey) *tcell.EventKey
 }
 
 type UI struct {
@@ -50,15 +62,29 @@ type UI struct {
 
 	media map[*Library]*MediaRef
 
-	libraryView  *LibraryView
-	mediaView    *MediaView
-	playlistView *PlaylistView
-	logView      *LogView
+	focusLocked      bool
+	focusBorderColor map[bool]tcell.Color
+
+	libraryView     *LibraryView
+	mediaView       *MediaView
+	mediaDetailView *MediaDetailView
+	playlistView    *PlaylistView
+	logView         *LogView
+}
+
+type UIView interface {
+	RootUI() *UI
+	FocusKeyRune() rune
+	LockFocus(lock bool)
+	Visible() bool
+	SetVisible(bool)
+	Proportion() int
+	Obscura() *tview.Flex
 }
 
 var (
 	self            *tview.Application
-	keyEventHandler = map[tcell.Key]UIView{}
+	focusKeyHandler = map[rune]tview.Primitive{}
 )
 
 func NewUI(opt *Options) *UI {
@@ -66,45 +92,67 @@ func NewUI(opt *Options) *UI {
 	self = tview.NewApplication()
 	sigDraw := make(chan interface{})
 
+	libraryRowsLayout := tview.NewFlex().SetDirection(tview.FlexRow)
 	mediaRowsLayout := tview.NewFlex().SetDirection(tview.FlexRow)
-	browseLayout := tview.NewFlex().SetDirection(tview.FlexColumn)
+	playlistRowsLayout := tview.NewFlex().SetDirection(tview.FlexRow)
+	browseColsLayout := tview.NewFlex().SetDirection(tview.FlexColumn)
+	browseMainLayout := tview.NewFlex().SetDirection(tview.FlexRow)
 
 	libraryView := &LibraryView{
-		tview.NewTreeView(),
-		browseLayout,
-		true,
+		TreeView:   tview.NewTreeView(),
+		rootUI:     nil,
+		obscura:    browseColsLayout,
+		proportion: 1,
+		isVisible:  true,
 	}
 	libraryView.SetTitle(" Library ")
 	libraryView.SetBorder(true)
 	libraryView.SetGraphics(true)
 	libraryView.SetTopLevel(1)
-	libraryView.SetInputCapture(nil)
 
 	mediaView := &MediaView{
-		tview.NewTable(),
-		mediaRowsLayout,
-		true,
+		Table:      tview.NewTable(),
+		rootUI:     nil,
+		obscura:    mediaRowsLayout,
+		proportion: 3,
+		isVisible:  true,
 	}
-	mediaView.SetTitle(" Media ")
-	mediaView.SetBorder(true)
+	mediaView.SetTitle("")
+	mediaView.SetBorder(false)
 	mediaView.SetBorders(false)
 	mediaView.SetSelectable(true /*rows*/, false /*cols*/)
-	mediaView.SetInputCapture(nil)
+
+	mediaDetailView := &MediaDetailView{
+		Form:       tview.NewForm(),
+		rootUI:     nil,
+		obscura:    mediaRowsLayout,
+		proportion: 1,
+		isVisible:  true,
+	}
+	mediaDetailView.SetTitle(" Info ")
+	mediaDetailView.SetBorder(true)
+	mediaDetailView.SetHorizontal(false)
+
+	mediaRowsLayout.SetBorder(true)
+	mediaRowsLayout.SetTitle(" Media ")
 
 	playlistView := &PlaylistView{
-		tview.NewList(),
-		browseLayout,
-		true,
+		List:       tview.NewList(),
+		rootUI:     nil,
+		obscura:    browseColsLayout,
+		proportion: 1,
+		isVisible:  true,
 	}
 	playlistView.SetTitle(" Playlist ")
 	playlistView.SetBorder(true)
 	playlistView.ShowSecondaryText(false)
-	playlistView.SetInputCapture(nil)
 
 	logView := &LogView{
-		tview.NewTextView(),
-		mediaRowsLayout,
-		true,
+		TextView:   tview.NewTextView(),
+		rootUI:     nil,
+		obscura:    mediaRowsLayout,
+		proportion: 1,
+		isVisible:  true,
 	}
 	logView.SetTitle(" Log ")
 	logView.SetBorder(true)
@@ -112,149 +160,268 @@ func NewUI(opt *Options) *UI {
 	logView.SetRegions(true)
 	logView.SetScrollable(true)
 	logView.SetWrap(false)
-	logView.SetInputCapture(nil)
+	setLogWriter(logView)
 
-	mediaRowsLayout.AddItem(mediaView, 0, 3, false)
-	mediaRowsLayout.AddItem(logView, 0, 1, false)
+	libraryRowsLayout.AddItem(libraryView, 0, libraryView.Proportion(), false)
 
-	browseLayout.AddItem(libraryView, 0, 2, false)
-	browseLayout.AddItem(mediaRowsLayout, 0, 3, false)
-	browseLayout.AddItem(playlistView, 0, 2, false)
+	mediaRowsLayout.AddItem(mediaView, 0, mediaView.Proportion(), false)
+	mediaRowsLayout.AddItem(mediaDetailView, 0, mediaDetailView.Proportion(), false)
+
+	playlistRowsLayout.AddItem(playlistView, 0, playlistView.Proportion(), false)
+
+	browseColsLayout.AddItem(libraryRowsLayout, 0, 1, false)
+	browseColsLayout.AddItem(mediaRowsLayout, 0, 2, false)
+	browseColsLayout.AddItem(playlistRowsLayout, 0, 1, false)
+
+	browseMainLayout.AddItem(browseColsLayout, 0, 3, false)
+	browseMainLayout.AddItem(logView, 0, logView.Proportion(), false)
 
 	pageLayout := tview.NewPages()
-	pageLayout.AddPage("browser", browseLayout, true, true)
-	//pageLayout.AddPage("playlist", playlistView, true, false)
+	pageLayout.AddPage("browser", browseMainLayout, true, true)
 
 	self.SetRoot(pageLayout, true)
 	self.SetFocus(mediaView)
-	self.SetInputCapture(inputHandler)
 
-	keyEventHandler[libraryView.FocusKey()] = libraryView
-	keyEventHandler[mediaView.FocusKey()] = mediaView
-	keyEventHandler[playlistView.FocusKey()] = playlistView
-	keyEventHandler[tcell.KeyCtrlP] = playlistView
-	keyEventHandler[logView.FocusKey()] = logView
+	focusKeyHandler[libraryView.FocusKeyRune()] = libraryView
+	focusKeyHandler[mediaView.FocusKeyRune()] = mediaView
+	focusKeyHandler[mediaDetailView.FocusKeyRune()] = mediaDetailView
+	focusKeyHandler[playlistView.FocusKeyRune()] = playlistView
+	focusKeyHandler[logView.FocusKeyRune()] = logView
 
-	return &UI{
-		app:     self,
+	rootUI := &UI{
+		app: self,
+
 		sigDraw: sigDraw,
-		media:   make(map[*Library]*MediaRef),
 
-		libraryView: libraryView,
-		mediaView:   mediaView,
-		logView:     logView,
+		media: make(map[*Library]*MediaRef),
+
+		focusLocked: false,
+		focusBorderColor: map[bool]tcell.Color{
+			false: tcell.ColorWhite,
+			true:  tcell.ColorGreen,
+		},
+
+		libraryView:     libraryView,
+		mediaView:       mediaView,
+		mediaDetailView: mediaDetailView,
+		playlistView:    playlistView,
+		logView:         logView,
 	}
+
+	// backreferences so each view has easy access to every other
+	rootUI.libraryView.rootUI = rootUI
+	rootUI.mediaView.rootUI = rootUI
+	rootUI.mediaDetailView.rootUI = rootUI
+	rootUI.playlistView.rootUI = rootUI
+	rootUI.logView.rootUI = rootUI
+
+	return rootUI
 }
 
-func inputHandler(event *tcell.EventKey) *tcell.EventKey {
+func (rootUI *UI) FocusInputHandler(view UIView, event *tcell.EventKey, setFocus func(p tview.Primitive)) bool {
+	switch event.Key() {
+	case tcell.KeyESC:
+		view.LockFocus(!rootUI.focusLocked)
+		return true
 
-	view, handled := keyEventHandler[event.Key()]
-	if handled {
-		return view.HandleKey(self, event)
+	case tcell.KeyCtrlP:
+		rootUI.playlistView.SetVisible(!rootUI.playlistView.Visible())
+		return true
+
+	case tcell.KeyRune:
+		if !rootUI.focusLocked {
+			if focusView, handled := focusKeyHandler[event.Rune()]; handled {
+				setFocus(focusView)
+				return true
+			}
+		}
 	}
-
-	return event
+	return false
 }
+
+func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+				return
+			}
+			view.TreeView.InputHandler()(event, setFocus)
+		})
+}
+
+func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+				return
+			}
+			view.Table.InputHandler()(event, setFocus)
+		})
+}
+
+func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+				return
+			}
+			view.Form.InputHandler()(event, setFocus)
+		})
+}
+
+func (view *PlaylistView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+				return
+			}
+			view.List.InputHandler()(event, setFocus)
+		})
+}
+
+func (view *LogView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+				return
+			}
+			view.TextView.InputHandler()(event, setFocus)
+		})
+}
+
+// converts the rootUI interface to a concrete *UI type
+func (view *LibraryView) RootUI() *UI     { return view.rootUI.(*UI) }
+func (view *MediaView) RootUI() *UI       { return view.rootUI.(*UI) }
+func (view *MediaDetailView) RootUI() *UI { return view.rootUI.(*UI) }
+func (view *PlaylistView) RootUI() *UI    { return view.rootUI.(*UI) }
+func (view *LogView) RootUI() *UI         { return view.rootUI.(*UI) }
+
+func (view *LibraryView) FocusKeyRune() rune     { return 'l' }
+func (view *MediaView) FocusKeyRune() rune       { return 'm' }
+func (view *MediaDetailView) FocusKeyRune() rune { return 'i' }
+func (view *PlaylistView) FocusKeyRune() rune    { return 'p' }
+func (view *LogView) FocusKeyRune() rune         { return 'v' }
+
+func (view *LibraryView) LockFocus(lock bool) {
+	rootUI := view.RootUI()
+	rootUI.focusLocked = lock
+	view.SetBorderColor(rootUI.focusBorderColor[lock])
+	infoLog.Logf("focus locked: %s", map[bool]string{false: "none", true: "LibraryView"}[rootUI.focusLocked])
+}
+
+func (view *MediaView) LockFocus(lock bool) {
+	rootUI := view.RootUI()
+	rootUI.focusLocked = lock
+	view.Obscura().SetBorderColor(rootUI.focusBorderColor[lock])
+	infoLog.Logf("focus locked: %s", map[bool]string{false: "none", true: "MediaView"}[rootUI.focusLocked])
+}
+
+func (view *MediaDetailView) LockFocus(lock bool) {
+	rootUI := view.RootUI()
+	rootUI.focusLocked = lock
+	view.SetBorderColor(rootUI.focusBorderColor[lock])
+	infoLog.Logf("focus locked: %s", map[bool]string{false: "none", true: "MediaDetailView"}[rootUI.focusLocked])
+}
+
+func (view *PlaylistView) LockFocus(lock bool) {
+	rootUI := view.RootUI()
+	rootUI.focusLocked = lock
+	view.SetBorderColor(rootUI.focusBorderColor[lock])
+	infoLog.Logf("focus locked: %s", map[bool]string{false: "none", true: "PlaylistView"}[rootUI.focusLocked])
+}
+
+func (view *LogView) LockFocus(lock bool) {
+	rootUI := view.RootUI()
+	rootUI.focusLocked = lock
+	view.SetBorderColor(rootUI.focusBorderColor[lock])
+	infoLog.Logf("focus locked: %s", map[bool]string{false: "none", true: "LogView"}[rootUI.focusLocked])
+}
+
+func (view *LibraryView) Visible() bool     { return view.isVisible }
+func (view *MediaView) Visible() bool       { return view.isVisible }
+func (view *MediaDetailView) Visible() bool { return view.isVisible }
+func (view *PlaylistView) Visible() bool    { return view.isVisible }
+func (view *LogView) Visible() bool         { return view.isVisible }
 
 func (view *LibraryView) SetVisible(visible bool) {
 	view.isVisible = visible
-	if view.isVisible {
-		view.container.AddItem(view, 0, 2, false)
-	} else {
-		view.container.RemoveItem(view)
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.AddItem(view, 0, view.Proportion(), false)
+			//obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.RemoveItem(view)
+			//obs.ResizeItem(view, 0, 0)
+		}
 	}
 }
 
 func (view *MediaView) SetVisible(visible bool) {
 	view.isVisible = visible
-	if view.isVisible {
-		view.container.AddItem(view, 0, 3, false)
-	} else {
-		view.container.RemoveItem(view)
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.AddItem(view, 0, view.Proportion(), false)
+			//obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.RemoveItem(view)
+			//obs.ResizeItem(view, 0, 0)
+		}
+	}
+}
+
+func (view *MediaDetailView) SetVisible(visible bool) {
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.AddItem(view, 0, view.Proportion(), false)
+			//obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.RemoveItem(view)
+			//obs.ResizeItem(view, 0, 0)
+		}
 	}
 }
 
 func (view *PlaylistView) SetVisible(visible bool) {
+	infoLog.Log("resizing playlist")
 	view.isVisible = visible
-	if view.isVisible {
-		view.container.AddItem(view, 0, 2, false)
-	} else {
-		view.container.RemoveItem(view)
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.AddItem(view, 0, view.Proportion(), false)
+			//obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.RemoveItem(view)
+			//obs.ResizeItem(view, 0, 0)
+		}
 	}
 }
 
 func (view *LogView) SetVisible(visible bool) {
 	view.isVisible = visible
-	if view.isVisible {
-		view.container.AddItem(view, 0, 1, false)
-	} else {
-		view.container.RemoveItem(view)
-	}
-}
-
-func (*LibraryView) FocusKey() tcell.Key  { return tcell.KeyF9 }
-func (*MediaView) FocusKey() tcell.Key    { return tcell.KeyF10 }
-func (*PlaylistView) FocusKey() tcell.Key { return tcell.KeyF11 }
-func (*LogView) FocusKey() tcell.Key      { return tcell.KeyF12 }
-
-func (view *LibraryView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
-	key := event.Key()
-	switch key {
-	case view.FocusKey():
-		prevFocus := app.GetFocus()
-		if view.TreeView != prevFocus {
-			if nil != prevFocus {
-				prevFocus.Blur()
-			}
-			app.SetFocus(view)
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.AddItem(view, 0, view.Proportion(), false)
+			//obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.RemoveItem(view)
+			//obs.ResizeItem(view, 0, 0)
 		}
 	}
-	return event
 }
 
-func (view *MediaView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
-	key := event.Key()
-	switch key {
-	case view.FocusKey():
-		prevFocus := app.GetFocus()
-		if view.Table != prevFocus {
-			if nil != prevFocus {
-				prevFocus.Blur()
-			}
-			app.SetFocus(view)
-		}
-	}
-	return event
-}
+func (view *LibraryView) Proportion() int     { return view.proportion }
+func (view *MediaView) Proportion() int       { return view.proportion }
+func (view *MediaDetailView) Proportion() int { return view.proportion }
+func (view *PlaylistView) Proportion() int    { return view.proportion }
+func (view *LogView) Proportion() int         { return view.proportion }
 
-func (view *PlaylistView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
-	key := event.Key()
-	switch key {
-	case view.FocusKey():
-		prevFocus := app.GetFocus()
-		if view.List != prevFocus {
-			if nil != prevFocus {
-				prevFocus.Blur()
-			}
-			app.SetFocus(view)
-		}
-	case tcell.KeyCtrlP:
-		view.SetVisible(!view.isVisible)
-	}
-	return event
-}
-
-func (view *LogView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
-	key := event.Key()
-	switch key {
-	case view.FocusKey():
-		prevFocus := app.GetFocus()
-		if view.TextView != prevFocus {
-			if nil != prevFocus {
-				prevFocus.Blur()
-			}
-			app.SetFocus(view)
-		}
-	}
-	return event
-}
+func (view *LibraryView) Obscura() *tview.Flex     { return view.obscura }
+func (view *MediaView) Obscura() *tview.Flex       { return view.obscura }
+func (view *MediaDetailView) Obscura() *tview.Flex { return view.obscura }
+func (view *PlaylistView) Obscura() *tview.Flex    { return view.obscura }
+func (view *LogView) Obscura() *tview.Flex         { return view.obscura }

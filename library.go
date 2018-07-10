@@ -13,7 +13,7 @@ type Library struct {
 	name       string              // logical filename portion of path
 	depthLimit uint                // recursive traversal depth
 	ignored    []string            // patterns of ignored directories
-	media      map[string][]*Media // map of each subdirectory to its file content
+	media      map[string][]*Media // map of each subdirectory to slice of its files
 	sigDir     chan string         // subdirectory discovery
 	sigMedia   chan *Media         // media discovery
 }
