@@ -11,6 +11,7 @@ type LibraryView struct {
 	obscura    *tview.Flex
 	proportion int
 	isVisible  bool
+	focusRune  rune
 }
 
 type MediaView struct {
@@ -19,6 +20,7 @@ type MediaView struct {
 	obscura    *tview.Flex
 	proportion int
 	isVisible  bool
+	focusRune  rune
 }
 
 type MediaDetailView struct {
@@ -27,6 +29,7 @@ type MediaDetailView struct {
 	obscura    *tview.Flex
 	proportion int
 	isVisible  bool
+	focusRune  rune
 }
 
 type PlaylistView struct {
@@ -35,6 +38,7 @@ type PlaylistView struct {
 	obscura    *tview.Flex
 	proportion int
 	isVisible  bool
+	focusRune  rune
 }
 
 type LogView struct {
@@ -43,6 +47,7 @@ type LogView struct {
 	obscura    *tview.Flex
 	proportion int
 	isVisible  bool
+	focusRune  rune
 }
 
 type ModalView struct {
@@ -82,7 +87,8 @@ type UI struct {
 
 type UIView interface {
 	RootUI() *UI
-	FocusKeyRune() rune
+	Primitive() tview.Primitive
+	FocusRune() rune
 	LockFocus(lock bool)
 	Visible() bool
 	SetVisible(bool)
@@ -90,9 +96,32 @@ type UIView interface {
 	Obscura() *tview.Flex
 }
 
+func (rootUI *UI) ViewForFocusRune(r rune) UIView {
+
+	focusView := map[rune]UIView{
+		rootUI.libraryView.FocusRune():     rootUI.libraryView,
+		rootUI.mediaView.FocusRune():       rootUI.mediaView,
+		rootUI.mediaDetailView.FocusRune(): rootUI.mediaDetailView,
+		rootUI.playlistView.FocusRune():    rootUI.playlistView,
+		rootUI.logView.FocusRune():         rootUI.logView,
+	}
+
+	if view, ok := focusView[r]; ok {
+		return view
+	}
+	return nil
+}
+
 const (
 	PageIDBrowser   = "browse"
 	PageIDQuitModal = "quit"
+
+	LibraryFocusRune     = 'l'
+	MediaFocusRune       = 'm'
+	MediaDetailFocusRune = 'i'
+	PlaylistFocusRune    = 'p'
+	LogFocusRune         = 'v'
+	QuitRune             = 'q'
 )
 
 var (
@@ -105,67 +134,91 @@ func NewUI(opt *Options) *UI {
 	self = tview.NewApplication()
 	sigDraw := make(chan interface{})
 
+	//
+	// containers for the primitive views
+	//
 	mediaRowsLayout := tview.NewFlex().SetDirection(tview.FlexRow)
+	mediaRowsLayout.SetBorder(true)
+	mediaRowsLayout.SetTitle(" Media (m) ")
+
 	browseColsLayout := tview.NewFlex().SetDirection(tview.FlexColumn)
+
 	browseMainLayout := tview.NewFlex().SetDirection(tview.FlexRow)
 
+	//
+	// library tree view
+	//
 	libraryView := &LibraryView{
 		TreeView:   tview.NewTreeView(),
 		rootUI:     nil,
 		obscura:    browseColsLayout,
 		proportion: 1,
 		isVisible:  true,
+		focusRune:  LibraryFocusRune,
 	}
-	libraryView.SetTitle(" Library ")
+	libraryView.SetTitle(" Library (l) ")
 	libraryView.SetBorder(true)
 	libraryView.SetGraphics(true)
 	libraryView.SetTopLevel(1)
 
+	//
+	// media table view
+	//
 	mediaView := &MediaView{
 		Table:      tview.NewTable(),
 		rootUI:     nil,
 		obscura:    mediaRowsLayout,
 		proportion: 3,
 		isVisible:  true,
+		focusRune:  MediaFocusRune,
 	}
 	mediaView.SetTitle("")
 	mediaView.SetBorder(false)
 	mediaView.SetBorders(false)
 	mediaView.SetSelectable(true /*rows*/, false /*cols*/)
 
+	//
+	// embedded selected-media-info form view
+	//
 	mediaDetailView := &MediaDetailView{
 		Form:       tview.NewForm(),
 		rootUI:     nil,
 		obscura:    mediaRowsLayout,
 		proportion: 1,
 		isVisible:  true,
+		focusRune:  MediaDetailFocusRune,
 	}
-	mediaDetailView.SetTitle(" Info ")
+	mediaDetailView.SetTitle(" Info (i) ")
 	mediaDetailView.SetBorder(true)
 	mediaDetailView.SetHorizontal(false)
 
-	mediaRowsLayout.SetBorder(true)
-	mediaRowsLayout.SetTitle(" Media ")
-
+	//
+	// playlist list view
+	//
 	playlistView := &PlaylistView{
 		List:       tview.NewList(),
 		rootUI:     nil,
 		obscura:    browseColsLayout,
 		proportion: 1,
 		isVisible:  true,
+		focusRune:  PlaylistFocusRune,
 	}
-	playlistView.SetTitle(" Playlist ")
+	playlistView.SetTitle(" Playlist (p) ")
 	playlistView.SetBorder(true)
 	playlistView.ShowSecondaryText(false)
 
+	//
+	// active log text view
+	//
 	logView := &LogView{
 		TextView:   tview.NewTextView(),
 		rootUI:     nil,
 		obscura:    browseMainLayout,
 		proportion: 1,
 		isVisible:  true,
+		focusRune:  LogFocusRune,
 	}
-	logView.SetTitle(" Log ")
+	logView.SetTitle(" Log (v) ")
 	logView.SetBorder(true)
 	logView.SetDynamicColors(true)
 	logView.SetRegions(true)
@@ -173,6 +226,9 @@ func NewUI(opt *Options) *UI {
 	logView.SetWrap(false)
 	setLogWriter(logView)
 
+	//
+	// composition of container views
+	//
 	mediaRowsLayout.AddItem(mediaView, 0, mediaView.Proportion(), false)
 	mediaRowsLayout.AddItem(mediaDetailView, 0, mediaDetailView.Proportion(), false)
 
@@ -183,18 +239,27 @@ func NewUI(opt *Options) *UI {
 	browseMainLayout.AddItem(browseColsLayout, 0, 3, false)
 	browseMainLayout.AddItem(logView, 0, logView.Proportion(), false)
 
+	//
+	// root-level container selects which app page to display
+	//
 	pageControl := &PageControl{
 		Pages:       tview.NewPages(),
 		focusedView: mediaView,
 	}
 	pageControl.AddPage(PageIDBrowser, browseMainLayout, true, true)
 
-	focusKeyHandler[libraryView.FocusKeyRune()] = libraryView
-	focusKeyHandler[mediaView.FocusKeyRune()] = mediaView
-	focusKeyHandler[mediaDetailView.FocusKeyRune()] = mediaDetailView
-	focusKeyHandler[playlistView.FocusKeyRune()] = playlistView
-	focusKeyHandler[logView.FocusKeyRune()] = logView
+	//
+	// construct reference table for focus key handlers
+	//
+	focusKeyHandler[libraryView.FocusRune()] = libraryView
+	focusKeyHandler[mediaView.FocusRune()] = mediaView
+	focusKeyHandler[mediaDetailView.FocusRune()] = mediaDetailView
+	focusKeyHandler[playlistView.FocusRune()] = playlistView
+	focusKeyHandler[logView.FocusRune()] = logView
 
+	//
+	// layout definition of entire UI
+	//
 	rootUI := &UI{
 		app: self,
 
@@ -216,10 +281,16 @@ func NewUI(opt *Options) *UI {
 		pageControl:     pageControl,
 	}
 
+	//
+	// initially focused view
+	//
 	self.SetRoot(pageControl, true)
 	self.SetFocus(mediaView)
+	mediaView.obscura.SetBorderColor(rootUI.focusBorderColor[true])
 
-	// backreferences so each view has easy access to every other
+	//
+	// backreference so each view has easy access to every other
+	//
 	rootUI.libraryView.rootUI = rootUI
 	rootUI.mediaView.rootUI = rootUI
 	rootUI.mediaDetailView.rootUI = rootUI
@@ -229,90 +300,109 @@ func NewUI(opt *Options) *UI {
 	return rootUI
 }
 
-func (rootUI *UI) FocusInputHandler(
-	view UIView, event *tcell.EventKey, setFocus func(p tview.Primitive)) bool {
+func isQuitEventKeyRune(keyRune rune) bool { return QuitRune == keyRune }
 
-	switch event.Key() {
+func (rootUI *UI) ConfirmQuitPrompt() {
 
-	case tcell.KeyCtrlC:
-		return true
-
-	case tcell.KeyESC:
-		view.LockFocus(!rootUI.focusLocked)
-		return true
-
-	case tcell.KeyCtrlL:
-		rootUI.libraryView.SetVisible(!rootUI.libraryView.Visible())
-		return true
-
-	case tcell.KeyCtrlI:
-		rootUI.mediaDetailView.SetVisible(!rootUI.mediaDetailView.Visible())
-		return true
-
-	case tcell.KeyCtrlP:
-		rootUI.playlistView.SetVisible(!rootUI.playlistView.Visible())
-		return true
-
-	case tcell.KeyCtrlV:
-		rootUI.logView.SetVisible(!rootUI.logView.Visible())
-		return true
-
-	case tcell.KeyRune:
-		switch event.Rune() {
-
-		case 'q':
-			modalView := &ModalView{Modal: tview.NewModal()}
-			modalView.SetText("Calling it quits?")
-			modalView.AddButtons([]string{"Quit", "Cancel"})
-			modalView.SetInputCapture(
-				func(event *tcell.EventKey) *tcell.EventKey {
-					switch event.Key() {
-					case tcell.KeyUp:
-					case tcell.KeyDown:
-					}
-					return event
-				})
-			modalView.SetDoneFunc(
-				func(buttonIndex int, buttonLabel string) {
-					switch {
-					case 0 == buttonIndex: // "Quit"
-						rootUI.app.Stop()
-					case 1 == buttonIndex || buttonIndex < 0: // "Cancel"/ESC pressed
-						rootUI.pageControl.RemovePage(PageIDQuitModal)
-						rootUI.app.SetFocus(rootUI.pageControl.focusedView)
-					}
-				})
-
-			rootUI.pageControl.AddPage(PageIDQuitModal, modalView, true, true)
-			return true
-
-		default:
-			if !rootUI.focusLocked {
-				if focusView, handled := focusKeyHandler[event.Rune()]; handled {
-					infoLog.Logf("focused: %T", focusView)
-					rootUI.pageControl.focusedView = focusView
-					setFocus(focusView)
-					return true
-				}
+	modalView := &ModalView{Modal: tview.NewModal()}
+	modalView.SetText("Calling it quits?")
+	modalView.AddButtons([]string{"Quit", "Cancel"})
+	//	modalView.SetInputCapture(
+	//		func(event *tcell.EventKey) *tcell.EventKey {
+	//			infoLog.Log("input capture")
+	//			switch event.Key() {
+	//			case tcell.KeyUp:
+	//				infoLog.Log("KeyUp")
+	//			case tcell.KeyDown:
+	//				infoLog.Log("KeyDown")
+	//			case tcell.KeyLeft:
+	//				infoLog.Log("KeyLeft")
+	//			case tcell.KeyRight:
+	//				infoLog.Log("KeyRight")
+	//			}
+	//			return event
+	//		})
+	modalView.SetDoneFunc(
+		func(buttonIndex int, buttonLabel string) {
+			switch {
+			case 0 == buttonIndex: // "Quit"
+				rootUI.app.Stop()
+			case 1 == buttonIndex || buttonIndex < 0: // "Cancel"/ESC pressed
+				rootUI.pageControl.RemovePage(PageIDQuitModal)
+				rootUI.app.SetFocus(rootUI.pageControl.focusedView)
 			}
-		}
-	}
-	return false
+		})
+
+	rootUI.pageControl.AddPage(PageIDQuitModal, modalView, true, true)
 }
 
-func (view *ModalView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-	infoLog.Log("caught it for modal")
-	return view.WrapInputHandler(
-		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			infoLog.Log("handling it for modal")
-			view.Modal.InputHandler()(event, setFocus)
-		})
+func (rootUI *UI) GlobalInputHandled(
+	view UIView, event *tcell.EventKey, setFocus func(p tview.Primitive)) bool {
+
+	inKey := event.Key()
+	inMods := event.Modifiers()
+	//inName := event.Name()
+	inRune := event.Rune()
+	//inWhen := event.When()
+
+	infoLog.Log("input handler")
+
+	switch inMods {
+
+	case tcell.ModShift:
+	case tcell.ModCtrl:
+
+		switch inKey {
+
+		case tcell.KeyCtrlC:
+			rootUI.ConfirmQuitPrompt()
+			return true
+		}
+
+	case tcell.ModAlt:
+
+		// keypresses with Alt+ are view constrol/visibility events
+		targetView := rootUI.ViewForFocusRune(inRune)
+		if nil != targetView {
+			targetView.SetVisible(!targetView.Visible())
+		}
+
+	case tcell.ModMeta:
+	case tcell.ModNone:
+
+		switch inKey {
+
+		case tcell.KeyRune:
+
+			switch {
+			case isQuitEventKeyRune(inRune):
+				rootUI.ConfirmQuitPrompt()
+				return true
+
+			default:
+				if !rootUI.focusLocked {
+					if focusView, handled := focusKeyHandler[inRune]; handled {
+						infoLog.Logf("focused: %T", focusView)
+						rootUI.pageControl.focusedView = focusView
+						setFocus(focusView)
+						return true
+					}
+				}
+			}
+
+		default:
+			// nothing
+		}
+
+	}
+
+	return false
 }
 
 func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
 			view.TreeView.InputHandler()(event, setFocus)
@@ -322,7 +412,7 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
 			view.Table.InputHandler()(event, setFocus)
@@ -332,7 +422,7 @@ func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(
 func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
 			view.Form.InputHandler()(event, setFocus)
@@ -342,17 +432,19 @@ func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus
 func (view *PlaylistView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
-			view.List.InputHandler()(event, setFocus)
+			if !(tcell.KeyRune == event.Key() && ' ' == event.Rune()) {
+				view.List.InputHandler()(event, setFocus)
+			}
 		})
 }
 
 func (view *LogView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			if view.RootUI().FocusInputHandler(view, event, setFocus) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
 			view.TextView.InputHandler()(event, setFocus)
@@ -431,11 +523,17 @@ func (view *MediaDetailView) RootUI() *UI { return view.rootUI.(*UI) }
 func (view *PlaylistView) RootUI() *UI    { return view.rootUI.(*UI) }
 func (view *LogView) RootUI() *UI         { return view.rootUI.(*UI) }
 
-func (view *LibraryView) FocusKeyRune() rune     { return 'l' }
-func (view *MediaView) FocusKeyRune() rune       { return 'm' }
-func (view *MediaDetailView) FocusKeyRune() rune { return 'i' }
-func (view *PlaylistView) FocusKeyRune() rune    { return 'p' }
-func (view *LogView) FocusKeyRune() rune         { return 'v' }
+func (view *LibraryView) Primitive() tview.Primitive     { return view.TreeView }
+func (view *MediaView) Primitive() tview.Primitive       { return view.Table }
+func (view *MediaDetailView) Primitive() tview.Primitive { return view.Form }
+func (view *PlaylistView) Primitive() tview.Primitive    { return view.List }
+func (view *LogView) Primitive() tview.Primitive         { return view.TextView }
+
+func (view *LibraryView) FocusRune() rune     { return LibraryFocusRune }
+func (view *MediaView) FocusRune() rune       { return MediaFocusRune }
+func (view *MediaDetailView) FocusRune() rune { return MediaDetailFocusRune }
+func (view *PlaylistView) FocusRune() rune    { return PlaylistFocusRune }
+func (view *LogView) FocusRune() rune         { return LogFocusRune }
 
 func (view *LibraryView) LockFocus(lock bool)     { view.RootUI().focusLocked = lock }
 func (view *MediaView) LockFocus(lock bool)       { view.RootUI().focusLocked = lock }
