@@ -2,393 +2,690 @@ package main
 
 import (
 	"fmt"
-	"path"
-	"strings"
-	"time"
-
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 )
 
-type LibDirKey struct {
-	layout  *Layout
-	path    string
-	library *Library
+type LibraryView struct {
+	*tview.TreeView
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+	focusRune  rune
+	size       int
 }
 
-func (key *LibDirKey) String() string {
-	return fmt.Sprintf("%s|%s", key.path, key.library)
+type MediaView struct {
+	*tview.Table
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+	focusRune  rune
+	size       int
 }
 
-func (key *LibDirKey) Node() *tview.TreeNode {
-	index := *key.layout.libIndex
-	if node, ok := index[key.String()]; ok {
-		return node
-	}
-	return nil
+type MediaDetailView struct {
+	*tview.Form
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+	focusRune  rune
+	size       int
 }
 
-type PimmView interface {
-	FocusKey() tcell.Key
-	HandleKey(*tview.Application, *tcell.EventKey) *tcell.EventKey
+type PlaylistView struct {
+	*tview.List
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+	focusRune  rune
+	size       int
 }
 
-type PVTreeView struct{ *tview.TreeView }
-type PVTableView struct{ *tview.Table }
-type PVTextView struct{ *tview.TextView }
+type LogView struct {
+	*tview.TextView
+	rootUI     interface{}
+	obscura    *tview.Flex
+	proportion int
+	isVisible  bool
+	focusRune  rune
+	size       int
+}
 
-type Layout struct {
-	app         *tview.Application
-	options     *Options
-	updateQueue *chan bool
-	selectedKey *LibDirKey
-	mediaIndex  *map[string]*tview.TableCell
-	libIndex    *map[string]*tview.TreeNode
-	libTree     *PVTreeView
-	mediaTable  *PVTableView
-	logView     *PVTextView
+type ModalView struct {
+	*tview.Modal
+}
+
+type PageControl struct {
+	*tview.Pages
+	focusedView tview.Primitive
+}
+
+type MediaRef struct {
+	library       *Library
+	media         *Media
+	libraryNode   *tview.TreeNode
+	mediaCell     *tview.TableCell
+	playlistIndex int
+}
+
+type UI struct {
+	app *tview.Application
+
+	sigDraw chan interface{}
+
+	media map[*Library]*MediaRef
+
+	focusLocked      bool
+	focusLockedView  UIView
+	focusTitleColor  map[bool]tcell.Color
+	focusBorderColor map[bool]tcell.Color
+
+	libraryView     *LibraryView
+	mediaView       *MediaView
+	mediaDetailView *MediaDetailView
+	playlistView    *PlaylistView
+	logView         *LogView
+	pageControl     *PageControl
+}
+
+type UIView interface {
+	RootUI() *UI
+	FocusRune() rune
+	LockFocus(bool)
+	Visible() bool
+	SetVisible(bool)
+	Proportion() int
+	Obscura() *tview.Flex
 }
 
 const (
-	TreeNodeColorSelected    = tcell.ColorGreen
-	TreeNodeColorNotSelected = tcell.ColorWhite
+	PageIDBrowser   = "browse"
+	PageIDQuitModal = "quit"
+
+	LibraryFocusRune     = 'l'
+	MediaFocusRune       = 'm'
+	MediaDetailFocusRune = 'i'
+	PlaylistFocusRune    = 'p'
+	LogFocusRune         = 'v'
+	QuitRune             = 'q'
 )
 
-const (
-	DrawUpdateDuration = 100 * time.Millisecond
-	DrawCycleDuration  = 10 * DrawUpdateDuration
-)
+type ViewPrimitive struct {
+	view UIView
+	prim tview.Primitive
+}
 
 var (
-	app        *tview.Application
-	keyHandler = map[tcell.Key]PimmView{}
+	self         *tview.Application
+	focusKeyView = map[rune]ViewPrimitive{}
 )
 
-func appInputHandler(event *tcell.EventKey) *tcell.EventKey {
+func NewUI(opt *Options) *UI {
 
-	// if appInputHandler was called, then it was succesfully installed on the
-	// unit-visible "app" and is thus non-nil
-	view, handle := keyHandler[event.Key()]
-	if handle {
-		return view.HandleKey(app, event)
+	self = tview.NewApplication()
+	sigDraw := make(chan interface{})
+
+	//
+	// containers for the primitive views
+	//
+	mediaRowsLayout := tview.NewFlex().SetDirection(tview.FlexRow)
+	mediaRowsLayout.SetBorder(true)
+	mediaRowsLayout.SetTitle(" Media (m) ")
+
+	browseColsLayout := tview.NewFlex().SetDirection(tview.FlexColumn)
+
+	browseMainLayout := tview.NewFlex().SetDirection(tview.FlexRow)
+
+	//
+	// library tree view
+	//
+	libraryView := &LibraryView{
+		TreeView:   tview.NewTreeView(),
+		rootUI:     nil,
+		obscura:    browseColsLayout,
+		proportion: 1,
+		isVisible:  true,
+		focusRune:  LibraryFocusRune,
 	}
+	libraryView.SetTitle(" Library (l) ")
+	libraryView.SetBorder(true)
+	libraryView.SetGraphics(true)
+	libraryView.SetTopLevel(1)
 
-	return event
-}
-
-func (view *PVTreeView) FocusKey() tcell.Key {
-	return tcell.KeyF1
-}
-
-func (view *PVTreeView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
-
-	key := event.Key()
-	switch key {
-	case view.FocusKey():
-		prevFocus := app.GetFocus()
-		if view.TreeView != prevFocus {
-			if nil != prevFocus {
-				prevFocus.Blur()
-			}
-			app.SetFocus(view)
-		}
-
-	case tcell.KeyF5:
-		node := view.GetCurrentNode()
-		switch ref := node.GetReference().(type) {
-		case *LibDirKey:
-			go func(r *LibDirKey) {
-				r.layout.ShowMedia(r)
-			}(ref)
-		}
+	//
+	// media table view
+	//
+	mediaView := &MediaView{
+		Table:      tview.NewTable(),
+		rootUI:     nil,
+		obscura:    mediaRowsLayout,
+		proportion: 3,
+		isVisible:  true,
+		focusRune:  MediaFocusRune,
 	}
-	return event
-}
+	mediaView.SetTitle("")
+	mediaView.SetBorder(false)
+	mediaView.SetBorders(false)
+	mediaView.SetSelectable(true /*rows*/, false /*cols*/)
 
-func (view *PVTableView) FocusKey() tcell.Key {
-	return tcell.KeyF2
-}
-
-func (view *PVTableView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
-
-	key := event.Key()
-	switch key {
-	case view.FocusKey():
-		prevFocus := app.GetFocus()
-		if view.Table != prevFocus {
-			if nil != prevFocus {
-				prevFocus.Blur()
-			}
-			app.SetFocus(view)
-		}
+	//
+	// embedded selected-media-info form view
+	//
+	mediaDetailView := &MediaDetailView{
+		Form:       tview.NewForm(),
+		rootUI:     nil,
+		obscura:    mediaRowsLayout,
+		proportion: 1,
+		isVisible:  true,
+		focusRune:  MediaDetailFocusRune,
 	}
-	return event
-}
+	mediaDetailView.SetTitle(" Info (i) ")
+	mediaDetailView.SetBorder(true)
+	mediaDetailView.SetHorizontal(false)
 
-func (view *PVTextView) FocusKey() tcell.Key {
-	return tcell.KeyF12
-}
-
-func (view *PVTextView) HandleKey(app *tview.Application, event *tcell.EventKey) *tcell.EventKey {
-
-	key := event.Key()
-	switch key {
-	case view.FocusKey():
-		prevFocus := app.GetFocus()
-		if view.TextView != prevFocus {
-			if nil != prevFocus {
-				prevFocus.Blur()
-			}
-			app.SetFocus(view)
-		}
+	//
+	// playlist list view
+	//
+	playlistView := &PlaylistView{
+		List:       tview.NewList(),
+		rootUI:     nil,
+		obscura:    browseColsLayout,
+		proportion: 1,
+		isVisible:  true,
+		focusRune:  PlaylistFocusRune,
 	}
-	return event
-}
+	playlistView.SetTitle(" Playlist (p) ")
+	playlistView.SetBorder(true)
+	playlistView.ShowSecondaryText(false)
 
-// creates and initializes the tview primitives that will constitute the layout
-// of our primary view
-func initUI(opt *Options) *Layout {
-
-	// the root tview object "app" coordinates all of the tview primitives with
-	// the tcell screen object, who in-turn coordinates that screen object with
-	// our actual terminal
-	app = tview.NewApplication()
-	app.SetInputCapture(appInputHandler)
-
-	// we create channel "updateQueue" to be polled periodically[1] by a lone
-	// wolf goroutine.
-	//   NOTE[1]: periodically means polled every "DrawUpdateDuration" (above)
-	updateQueue := make(chan bool)
-	//setLogUpdate(&updateQueue)
-
-	// decided to use a tview.Table for displaying the most important view of
-	// this application -- the library media browser
-	mediaIndex := make(map[string]*tview.TableCell)
-	mediaTable := &PVTableView{tview.NewTable()}
-	mediaTable.SetBorder(true)   // whole table
-	mediaTable.SetBorders(false) // inbetween cells
-	mediaTable.SetBackgroundColor(tcell.ColorBlack)
-	mediaTable.SetSelectable(true /*rows*/, false /*cols*/)
-	mediaTable.SetTitle(" Media ")
-	mediaTable.SetInputCapture(nil)
-
-	// created a tview.TreeView to present the libraries and the subdirs in a
-	// collapsable tree data structure mirroring a fs tree structure
-	libIndex := make(map[string]*tview.TreeNode)
-	libTree := &PVTreeView{tview.NewTreeView()}
-	rootNode := tview.NewTreeNode("<ROOT>")
-	libTree.SetRoot(rootNode).SetCurrentNode(rootNode)
-	libTree.SetBorder(true).SetTitle(" Library ")
-	libTree.SetGraphics(true)
-	libTree.SetTopLevel(1)
-	libTree.SetSelectedFunc(libTreeNodeSelected)
-	libTree.SetChangedFunc(libTreeNodeChanged)
-	libTree.SetInputCapture(nil)
-
-	logView := &PVTextView{tview.NewTextView()}
-	logView.SetTitle(" Log ")
+	//
+	// active log text view
+	//
+	logView := &LogView{
+		TextView:   tview.NewTextView(),
+		rootUI:     nil,
+		obscura:    browseMainLayout,
+		proportion: 1,
+		isVisible:  true,
+		focusRune:  LogFocusRune,
+	}
+	logView.SetTitle(" Log (v) ")
 	logView.SetBorder(true)
 	logView.SetDynamicColors(true)
 	logView.SetRegions(true)
 	logView.SetScrollable(true)
 	logView.SetWrap(false)
-	logView.SetInputCapture(nil)
 	setLogWriter(logView)
 
-	browseLayout := tview.NewFlex().SetDirection(tview.FlexColumn)
-	browseLayout.AddItem(libTree, 0, 1, false)
-	browseLayout.AddItem(mediaTable, 0, 3, false)
+	//
+	// composition of container views
+	//
+	mediaRowsLayout.AddItem(mediaView, 0, mediaView.Proportion(), false)
+	mediaRowsLayout.AddItem(mediaDetailView, 0, mediaDetailView.Proportion(), false)
 
-	mainLayout := tview.NewFlex().SetDirection(tview.FlexRow)
-	mainLayout.AddItem(browseLayout, 0, 3, false)
-	mainLayout.AddItem(logView, 0, 1, false)
+	browseColsLayout.AddItem(libraryView, 0, libraryView.Proportion(), false)
+	browseColsLayout.AddItem(mediaRowsLayout, 0, 2, false)
+	browseColsLayout.AddItem(playlistView, 0, playlistView.Proportion(), false)
 
-	app.SetRoot(mainLayout, true).SetFocus(libTree)
+	browseMainLayout.AddItem(browseColsLayout, 0, 3, false)
+	browseMainLayout.AddItem(logView, 0, logView.Proportion(), false)
 
-	keyHandler[libTree.FocusKey()] = libTree
-	keyHandler[tcell.KeyF5] = libTree
-	keyHandler[mediaTable.FocusKey()] = mediaTable
-	keyHandler[logView.FocusKey()] = logView
+	//
+	// root-level container selects which app page to display
+	//
+	pageControl := &PageControl{
+		Pages:       tview.NewPages(),
+		focusedView: mediaView,
+	}
+	pageControl.AddPage(PageIDBrowser, browseMainLayout, true, true)
 
-	layout := &Layout{
-		app:         app,
-		options:     opt,
-		updateQueue: &updateQueue,
-		mediaIndex:  &mediaIndex,
-		libIndex:    &libIndex,
-		libTree:     libTree,
-		mediaTable:  mediaTable,
-		logView:     logView,
+	//
+	// construct reference table for focus key handlers
+	//
+	focusKeyView[libraryView.FocusRune()] =
+		ViewPrimitive{libraryView, libraryView}
+	focusKeyView[mediaView.FocusRune()] =
+		ViewPrimitive{mediaView, mediaView}
+	focusKeyView[mediaDetailView.FocusRune()] =
+		ViewPrimitive{mediaDetailView, mediaDetailView}
+	focusKeyView[playlistView.FocusRune()] =
+		ViewPrimitive{playlistView, playlistView}
+	focusKeyView[logView.FocusRune()] =
+		ViewPrimitive{logView, logView}
+
+	//
+	// layout definition of entire UI
+	//
+	rootUI := &UI{
+		app: self,
+
+		sigDraw: sigDraw,
+
+		media: make(map[*Library]*MediaRef),
+
+		focusLocked:     false,
+		focusLockedView: nil,
+		focusTitleColor: map[bool]tcell.Color{
+			false: tcell.ColorWhite,
+			true:  tcell.ColorDeepSkyBlue,
+		},
+		focusBorderColor: map[bool]tcell.Color{
+			false: tcell.ColorWhite,
+			true:  tcell.ColorSteelBlue,
+		},
+
+		libraryView:     libraryView,
+		mediaView:       mediaView,
+		mediaDetailView: mediaDetailView,
+		playlistView:    playlistView,
+		logView:         logView,
+		pageControl:     pageControl,
 	}
 
-	//	rootKey := &LibDirKey{layout, "/", nil}
-	//	rootNode.SetColor(TreeNodeColorNotSelected)
-	//	rootNode.SetSelectable(true)
-	//	rootNode.SetExpanded(true)
-	//	rootNode.SetReference(rootKey)
-	//	updatePrefix(rootNode)
-	//	libIndex[rootKey.String()] = rootNode
+	//
+	// initially focused view
+	//
+	self.SetRoot(pageControl, true)
+	self.SetFocus(mediaView)
+	mediaView.obscura.SetTitleColor(rootUI.focusTitleColor[true])
+	mediaView.obscura.SetBorderColor(rootUI.focusBorderColor[true])
 
-	go layout.DrawCycle()
+	//
+	// backreference so each view has easy access to every other
+	//
+	rootUI.libraryView.rootUI = rootUI
+	rootUI.mediaView.rootUI = rootUI
+	rootUI.mediaDetailView.rootUI = rootUI
+	rootUI.playlistView.rootUI = rootUI
+	rootUI.logView.rootUI = rootUI
 
-	return layout
+	return rootUI
 }
 
-// spawn a goroutine that will update the UI only whenever we have a change
-// made to one of the subviews, as notified via the bool channel "draw"
-func (y *Layout) DrawCycle() {
-	// multiple goroutines may post to the channel in a very short timespan.
-	// so instead of redrawing every time, notify the channel that an update
-	// is available, Draw() once, and then drain the queue
-	//cycle := time.Tick(DrawCycleDuration)
-	update := time.Tick(DrawUpdateDuration)
-	for {
-		select {
-		case <-update:
-			// sufficient time has elapsed
-			select {
-			case <-*y.updateQueue:
-				// sufficient time elapsed AND we have an update available
-				y.app.Draw()
-				for empty := false; !empty; {
-					select {
-					case <-*y.updateQueue:
-					default:
-						empty = true
+func isQuitEventKeyRune(keyRune rune) bool { return QuitRune == keyRune }
+
+func (ui *UI) ConfirmQuitPrompt() {
+
+	modalView := &ModalView{Modal: tview.NewModal()}
+	modalView.SetText("Calling it quits?")
+	modalView.AddButtons([]string{"Quit", "Cancel"})
+	modalView.SetDoneFunc(
+		func(buttonIndex int, buttonLabel string) {
+			switch {
+			case 0 == buttonIndex: // "Quit"
+				ui.app.Stop()
+			case 1 == buttonIndex || buttonIndex < 0: // "Cancel"/ESC pressed
+				ui.pageControl.RemovePage(PageIDQuitModal)
+				ui.app.SetFocus(ui.pageControl.focusedView)
+			}
+		})
+
+	ui.pageControl.AddPage(PageIDQuitModal, modalView, true, true)
+}
+
+func (ui *UI) GlobalInputHandled(
+	view UIView, event *tcell.EventKey, setFocus func(p tview.Primitive)) bool {
+
+	inKey := event.Key()
+	inMods := event.Modifiers()
+	//inName := event.Name()
+	inRune := event.Rune()
+	//inWhen := event.When()
+
+	switch inMods {
+
+	case tcell.ModShift:
+	case tcell.ModCtrl:
+
+		switch inKey {
+
+		case tcell.KeyCtrlC:
+			ui.ConfirmQuitPrompt()
+			return true
+		}
+
+	case tcell.ModAlt:
+
+		switch target, ok := focusKeyView[inRune]; {
+
+		case ok:
+			target.view.SetVisible(!target.view.Visible())
+
+		}
+
+	case tcell.ModMeta:
+	case tcell.ModNone:
+
+		switch inKey {
+
+		case tcell.KeyEscape:
+			if ui.pageControl.focusedView.(UIView).Visible() {
+				ui.pageControl.focusedView.(UIView).LockFocus(!ui.focusLocked)
+			}
+
+		case tcell.KeyRune:
+
+			switch {
+			case isQuitEventKeyRune(inRune):
+				ui.ConfirmQuitPrompt()
+				return true
+
+			default:
+				if target, ok := focusKeyView[inRune]; ok {
+					if !ui.focusLocked {
+						infoLog.Logf("focused: %T", target.prim)
+						ui.pageControl.focusedView = target.prim
+						setFocus(target.prim)
+						target.view.SetVisible(true)
+						return true
 					}
 				}
-			default:
 			}
-		//case <-cycle:
-		// also perform unconditional draw updates at a regular interval to
-		// theoretically account for any changes i accidentally miss making
-		// an explicit request for -- on the incredibly low chance i mess up
-		//y.app.Draw()
+
 		default:
+			// nothing
 		}
+
 	}
+
+	return false
 }
 
-func updatePrefix(node *tview.TreeNode) {
+func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
+				return
+			}
+			view.TreeView.InputHandler()(event, setFocus)
+		})
+}
 
-	switch ref := node.GetReference().(type) {
-	case *LibDirKey:
-		text := path.Base(ref.path)
-		layout := ref.layout
-		isUTF8, isExpanded := layout.options.UTF8.bool, node.IsExpanded()
-		prefix := treeNodePrefixExpanded[isExpanded][isUTF8][false]
-		node.SetText(fmt.Sprintf("%s%s", prefix, text))
-		*layout.updateQueue <- true
+func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
+				return
+			}
+			view.Table.InputHandler()(event, setFocus)
+		})
+}
+
+func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
+				return
+			}
+			view.Form.InputHandler()(event, setFocus)
+		})
+}
+
+func (view *PlaylistView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
+				return
+			}
+			view.List.InputHandler()(event, setFocus)
+		})
+}
+
+func (view *LogView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.RootUI().GlobalInputHandled(view, event, setFocus) {
+				return
+			}
+			handled := false
+			switch event.Key() {
+			case tcell.KeyRune:
+				if ' ' == event.Rune() {
+					for n, c := range tcell.ColorNames {
+						v := tcell.ColorValues[c]
+						s := fmt.Sprintf("[#%06x] %24s: %10d 0x%08x [-:-:-]", v, n, v, v)
+						infoLog.Log(s)
+					}
+					handled = true
+				}
+			}
+			if !handled {
+				view.TextView.InputHandler()(event, setFocus)
+			}
+		})
+}
+
+func (view *LibraryView) Focus(delegate func(p tview.Primitive)) {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[true])
+		view.SetBorderColor(view.RootUI().focusBorderColor[true])
 	}
+	view.TreeView.Focus(delegate)
+}
+func (view *LibraryView) Blur() {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[false])
+		view.SetBorderColor(view.RootUI().focusBorderColor[false])
+	}
+	view.TreeView.Blur()
 }
 
-func libTreeNodeSelected(node *tview.TreeNode) {
-
-	node.SetExpanded(!node.IsExpanded())
-	updatePrefix(node)
+func (view *MediaView) Focus(delegate func(p tview.Primitive)) {
+	if nil != view.rootUI {
+		view.Obscura().SetTitleColor(view.RootUI().focusTitleColor[true])
+		view.Obscura().SetBorderColor(view.RootUI().focusBorderColor[true])
+	}
+	view.Table.Focus(delegate)
+}
+func (view *MediaView) Blur() {
+	if nil != view.rootUI {
+		view.Obscura().SetTitleColor(view.RootUI().focusTitleColor[false])
+		view.Obscura().SetBorderColor(view.RootUI().focusBorderColor[false])
+	}
+	view.Table.Blur()
 }
 
-func libTreeNodeChanged(node *tview.TreeNode) {
-
+func (view *MediaDetailView) Focus(delegate func(p tview.Primitive)) {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[true])
+		view.SetBorderColor(view.RootUI().focusBorderColor[true])
+	}
+	view.Form.Focus(delegate)
+}
+func (view *MediaDetailView) Blur() {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[false])
+		view.SetBorderColor(view.RootUI().focusBorderColor[false])
+	}
+	view.Form.Blur()
 }
 
-func (y *Layout) AddLibraryNode(lib *Library, path, name, parent string) {
+func (view *PlaylistView) Focus(delegate func(p tview.Primitive)) {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[true])
+		view.SetBorderColor(view.RootUI().focusBorderColor[true])
+	}
+	view.List.Focus(delegate)
+}
+func (view *PlaylistView) Blur() {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[false])
+		view.SetBorderColor(view.RootUI().focusBorderColor[false])
+	}
+	view.List.Blur()
+}
 
-	var parentNode *tview.TreeNode
+func (view *LogView) Focus(delegate func(p tview.Primitive)) {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[true])
+		view.SetBorderColor(view.RootUI().focusBorderColor[true])
+	}
+	view.TextView.Focus(delegate)
+}
+func (view *LogView) Blur() {
+	if nil != view.rootUI {
+		view.SetTitleColor(view.RootUI().focusTitleColor[false])
+		view.SetBorderColor(view.RootUI().focusBorderColor[false])
+	}
+	view.TextView.Blur()
+}
 
-	isRoot := len(parent) == 0
+// converts the rootUI interface to a concrete *UI type
+func (view *LibraryView) RootUI() *UI     { return view.rootUI.(*UI) }
+func (view *MediaView) RootUI() *UI       { return view.rootUI.(*UI) }
+func (view *MediaDetailView) RootUI() *UI { return view.rootUI.(*UI) }
+func (view *PlaylistView) RootUI() *UI    { return view.rootUI.(*UI) }
+func (view *LogView) RootUI() *UI         { return view.rootUI.(*UI) }
 
-	if isRoot {
-		parentNode = y.libTree.GetRoot()
+func (view *LibraryView) FocusRune() rune     { return LibraryFocusRune }
+func (view *MediaView) FocusRune() rune       { return MediaFocusRune }
+func (view *MediaDetailView) FocusRune() rune { return MediaDetailFocusRune }
+func (view *PlaylistView) FocusRune() rune    { return PlaylistFocusRune }
+func (view *LogView) FocusRune() rune         { return LogFocusRune }
+
+func (view *LibraryView) LockFocus(lock bool) {
+	view.RootUI().focusLocked = lock
+	view.RootUI().focusLockedView = view
+	if lock {
+		view.SetBorderColor(tcell.ColorDodgerBlue)
 	} else {
-		parentKey := &LibDirKey{y, parent, lib}
-		parentNode = parentKey.Node()
+		view.SetBorderColor(view.RootUI().focusBorderColor[view.RootUI().pageControl.focusedView == view])
 	}
-
-	key := &LibDirKey{y, path, lib}
-	nodeText := fmt.Sprintf("%s", name)
-	node := tview.NewTreeNode(nodeText)
-	node.SetColor(TreeNodeColorNotSelected)
-	node.SetSelectable(true)
-	node.SetExpanded(isRoot)
-	node.SetReference(key)
-	updatePrefix(node)
-
-	index := *y.libIndex
-	index[key.String()] = node
-	parentNode.AddChild(node)
-
-	*y.updateQueue <- true
 }
-
-func (y *Layout) AddLibrary(lib *Library) {
-	y.AddLibraryNode(lib, lib.Path(), lib.Name(), "" /* root paths have no parent */)
-}
-
-func (y *Layout) AddLibrarySubdir(lib *Library, subdir string) {
-	y.AddLibraryNode(lib, subdir, path.Base(subdir), path.Dir(subdir))
-}
-
-func (y *Layout) AddMediaTableRow(lib *Library, media *Media) {
-
-	var cell *tview.TableCell
-
-	row := y.mediaTable.GetRowCount()
-	for col, val := range media.Columns() {
-		cell = tview.NewTableCell(val)
-		cell.SetAlign(tview.AlignLeft)
-		y.mediaTable.SetCell(row, col, cell)
+func (view *MediaView) LockFocus(lock bool) {
+	view.RootUI().focusLocked = lock
+	view.RootUI().focusLockedView = view
+	if lock {
+		view.Obscura().SetBorderColor(tcell.ColorDodgerBlue)
+	} else {
+		view.Obscura().SetBorderColor(view.RootUI().focusBorderColor[view.RootUI().pageControl.focusedView == view])
 	}
-
-	index := *y.mediaIndex
-	mediaPath := media.Path()
-	_, exists := index[mediaPath]
-
-	if !exists {
-		index[mediaPath] = y.mediaTable.GetCell(0, 0)
-	}
-	*y.updateQueue <- true
 }
-
-func (y *Layout) AddMedia(lib *Library, media *Media) {
-
-	index := *y.mediaIndex
-	mediaPath := media.Path()
-	_, exists := index[mediaPath]
-
-	// one of the other libraries may have already found this file and is
-	// currntly displaying it in the media browser. we dont want duplicates
-	// --> so keep it simple and only show the file one time
-	if !exists {
-		y.AddMediaTableRow(lib, media)
+func (view *MediaDetailView) LockFocus(lock bool) {
+	view.RootUI().focusLocked = lock
+	view.RootUI().focusLockedView = view
+	if lock {
+		view.SetBorderColor(tcell.ColorDodgerBlue)
+	} else {
+		view.SetBorderColor(view.RootUI().focusBorderColor[view.RootUI().pageControl.focusedView == view])
+	}
+}
+func (view *PlaylistView) LockFocus(lock bool) {
+	view.RootUI().focusLocked = lock
+	view.RootUI().focusLockedView = view
+	if lock {
+		view.SetBorderColor(tcell.ColorDodgerBlue)
+	} else {
+		view.SetBorderColor(view.RootUI().focusBorderColor[view.RootUI().pageControl.focusedView == view])
+	}
+}
+func (view *LogView) LockFocus(lock bool) {
+	view.RootUI().focusLocked = lock
+	view.RootUI().focusLockedView = view
+	if lock {
+		view.SetBorderColor(tcell.ColorDodgerBlue)
+	} else {
+		view.SetBorderColor(view.RootUI().focusBorderColor[view.RootUI().pageControl.focusedView == view])
 	}
 }
 
-func (y *Layout) ShowMedia(key *LibDirKey) {
+func (view *LibraryView) Visible() bool     { return view.isVisible }
+func (view *MediaView) Visible() bool       { return view.isVisible }
+func (view *MediaDetailView) Visible() bool { return view.isVisible }
+func (view *PlaylistView) Visible() bool    { return view.isVisible }
+func (view *LogView) Visible() bool         { return view.isVisible }
 
-	y.mediaTable.Clear()
-
-	// unselect previous node
-	if prevKey := y.selectedKey; nil != prevKey {
-		if node := prevKey.Node(); nil != node {
-			node.SetColor(TreeNodeColorNotSelected)
-		}
-	}
-
-	// select current node
-	if node := key.Node(); nil != node {
-		y.selectedKey = key
-		node.SetColor(TreeNodeColorSelected)
-	}
-
-	table := key.library.Media()
-
-	infoLog.Logf("refreshing library media: %q", key.path)
-	for path, content := range table {
-		if strings.HasPrefix(path, key.path) {
-			for _, m := range content {
-				y.AddMediaTableRow(key.library, m)
+func (view *LibraryView) SetVisible(visible bool) {
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if visible {
+			obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.ResizeItem(view, 2, 0)
+			if view.RootUI().pageControl.focusedView == view {
+				view.LockFocus(false)
 			}
 		}
 	}
 }
+
+func (view *MediaView) SetVisible(visible bool) {
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.ResizeItem(view, 2, 0)
+			// if the media table is collapsing, fill remaining space with
+			// the media info form
+			view.RootUI().mediaDetailView.SetVisible(true)
+			if view.RootUI().pageControl.focusedView == view {
+				view.LockFocus(false)
+			}
+		}
+	}
+}
+
+func (view *MediaDetailView) SetVisible(visible bool) {
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.ResizeItem(view, 2, 0)
+			if view.RootUI().pageControl.focusedView == view {
+				view.LockFocus(false)
+			}
+		}
+	}
+}
+
+func (view *PlaylistView) SetVisible(visible bool) {
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.ResizeItem(view, 2, 0)
+			if view.RootUI().pageControl.focusedView == view {
+				view.LockFocus(false)
+			}
+		}
+	}
+}
+
+func (view *LogView) SetVisible(visible bool) {
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.ResizeItem(view, 2, 0)
+			if view.RootUI().pageControl.focusedView == view {
+				view.LockFocus(false)
+			}
+		}
+	}
+}
+
+func (view *LibraryView) Proportion() int     { return view.proportion }
+func (view *MediaView) Proportion() int       { return view.proportion }
+func (view *MediaDetailView) Proportion() int { return view.proportion }
+func (view *PlaylistView) Proportion() int    { return view.proportion }
+func (view *LogView) Proportion() int         { return view.proportion }
+
+func (view *LibraryView) Obscura() *tview.Flex     { return view.obscura }
+func (view *MediaView) Obscura() *tview.Flex       { return view.obscura }
+func (view *MediaDetailView) Obscura() *tview.Flex { return view.obscura }
+func (view *PlaylistView) Obscura() *tview.Flex    { return view.obscura }
+func (view *LogView) Obscura() *tview.Flex         { return view.obscura }
