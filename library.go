@@ -59,7 +59,7 @@ func NewLibrary(libName string, ignore []string) (*Library, *ErrorCode) {
 }
 
 func (l *Library) String() string {
-	return fmt.Sprintf("%q:{ depthLimit:%d ignored:%v }", l.path, l.depthLimit, l.ignored)
+	return fmt.Sprintf("%q{%s}[%d]", l.name, l.path, len(l.media))
 }
 
 func (l *Library) WorkingDir() string {
@@ -158,6 +158,9 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 		}
 
 		l.media[currPath] = []*Media{}
+		if depth > 1 {
+			l.sigDir <- currPath
+		}
 		for _, info := range contentInfo {
 			err := l.Walk(path.Join(currPath, info.Name()), depth+1)
 			if nil != err {

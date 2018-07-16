@@ -21,22 +21,22 @@ type Media struct {
 
 func NewMedia(info os.FileInfo, absPath string) (*Media, *ErrorCode) {
 
-	f, err := os.Open(absPath)
+	fh, err := os.Open(absPath)
 	if nil != err {
 		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to open file for hashing: %q", absPath))
 	}
-	defer f.Close()
+	defer fh.Close()
 
-	b, err := ioutil.ReadAll(f)
+	bytes, err := ioutil.ReadAll(fh)
 	if nil != err {
 		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to compute file hash: %q", absPath))
 	}
 
-	// TBD: spawn the checsum calculation off on its own
+	// TBD: spawn the checksum calculation off on its own
 	done := make(chan uint64)
-	go func(b []byte) {
-		done <- xxhash.Sum64(b)
-	}(b)
+	go func(bytes []byte) {
+		done <- xxhash.Sum64(bytes)
+	}(bytes)
 	hash := <-done
 
 	dir := path.Dir(absPath)
@@ -53,7 +53,7 @@ func NewMedia(info os.FileInfo, absPath string) (*Media, *ErrorCode) {
 }
 
 func (m *Media) String() string {
-	return fmt.Sprintf("%s [%x]", m.name, m.hash)
+	return fmt.Sprintf("%q{%s}#%x", m.name, m.path, m.hash)
 }
 
 func (m *Media) Columns() []string {

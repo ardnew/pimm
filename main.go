@@ -36,6 +36,7 @@ type Options struct {
 }
 
 func isLocaleUTF8() bool {
+
 	const LocaleEnvVar = "LANG"
 	localeLang := os.Getenv(LocaleEnvVar)
 	isUTF8, err := regexp.MatchString("\\.UTF-8$", localeLang)
@@ -131,23 +132,21 @@ func initLibrary(options *Options) []*Library {
 	return library
 }
 
-func populateLibrary(library []*Library, layout *Layout) {
+func populateLibrary(options *Options, library []*Library, ui *UI) {
 
 	for _, lib := range library {
-		layout.AddLibrary(lib)
+		ui.AddLibrary(lib)
 
-		go func(lib *Library, layout *Layout) {
+		go func(lib *Library, ui *UI) {
 			for {
 				select {
 				case subdir := <-lib.SigDir():
-					infoLog.Logf("entering: %q", subdir)
-					layout.AddLibrarySubdir(lib, subdir)
+					ui.AddLibraryDirectory(lib, subdir)
 				case media := <-lib.SigMedia():
-					infoLog.Logf("discovered: %s", media)
-					layout.AddMedia(lib, media)
+					ui.AddMedia(lib, media)
 				}
 			}
-		}(lib, layout)
+		}(lib, ui)
 	}
 
 	for _, lib := range library {
@@ -188,21 +187,13 @@ func main() {
 		errLog.Die(NewErrorCode(EInvalidLibrary, "no libraries found"))
 	}
 
-	// prep the UI components for population
-	//	layout := initUI(options)
-	//
-	//	// provided libraries exist and are readable, begin scanning
-	//	populateLibrary(library, layout)
-	//	infoLog.Log("libraries ready")
-	//
-	//	// launch the terminal UI runtime
-	//	if err := layout.app.Run(); err != nil {
-	//		infoLog.Die(NewErrorCode(EUnknown, err))
-	//	}
+	// initialize the UI components before population
+	ui := NewUI(options)
 
-	UI := NewUI(options)
+	// libraries and UI ready, spool up the initial library scanners
+	populateLibrary(options, library, ui)
 
-	if err := UI.app.Run(); err != nil {
+	if err := ui.app.Run(); err != nil {
 		errLog.Die(NewErrorCode(EUnknown, err))
 	}
 
