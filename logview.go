@@ -37,6 +37,61 @@ func NewLogView(container *tview.Flex) *LogView {
 	return logView
 }
 
+// -----------------------------------------------------------------------------
+//  (pimm) UIView interface
+// -----------------------------------------------------------------------------
+
+func (view *LogView) UI() *UI              { return view.ui.(*UI) }
+func (view *LogView) FocusRune() rune      { return view.focusRune }
+func (view *LogView) Obscura() *tview.Flex { return view.obscura }
+func (view *LogView) Proportion() int      { return view.proportion }
+func (view *LogView) Visible() bool        { return view.isVisible }
+
+func (view *LogView) SetVisible(visible bool) {
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if view.isVisible {
+			obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.ResizeItem(view, 2, 0)
+			if view.UI().pageControl.focusedView == view {
+				view.LockFocus(false)
+			}
+		}
+	}
+}
+
+func (view *LogView) LockFocus(lock bool) {
+	view.UI().focusLocked = lock
+	view.UI().focusLockedView = view
+	if lock {
+		view.SetBorderColor(tcell.ColorDodgerBlue)
+	} else {
+		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
+	}
+}
+
+// -----------------------------------------------------------------------------
+//  (tview) embedded Primitive.(TextView)
+// -----------------------------------------------------------------------------
+
+func (view *LogView) Focus(delegate func(p tview.Primitive)) {
+	if nil != view.ui {
+		view.SetTitleColor(view.UI().focusTitleColor[true])
+		view.SetBorderColor(view.UI().focusBorderColor[true])
+	}
+	view.TextView.Focus(delegate)
+}
+
+func (view *LogView) Blur() {
+	if nil != view.ui {
+		view.SetTitleColor(view.UI().focusTitleColor[false])
+		view.SetBorderColor(view.UI().focusBorderColor[false])
+	}
+	view.TextView.Blur()
+}
+
 func (view *LogView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
@@ -61,49 +116,6 @@ func (view *LogView) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 		})
 }
 
-func (view *LogView) Focus(delegate func(p tview.Primitive)) {
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[true])
-		view.SetBorderColor(view.UI().focusBorderColor[true])
-	}
-	view.TextView.Focus(delegate)
-}
-
-func (view *LogView) Blur() {
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[false])
-		view.SetBorderColor(view.UI().focusBorderColor[false])
-	}
-	view.TextView.Blur()
-}
-
-func (view *LogView) UI() *UI              { return view.ui.(*UI) }
-func (view *LogView) FocusRune() rune      { return view.focusRune }
-func (view *LogView) Obscura() *tview.Flex { return view.obscura }
-func (view *LogView) Proportion() int      { return view.proportion }
-
-func (view *LogView) LockFocus(lock bool) {
-	view.UI().focusLocked = lock
-	view.UI().focusLockedView = view
-	if lock {
-		view.SetBorderColor(tcell.ColorDodgerBlue)
-	} else {
-		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
-	}
-}
-
-func (view *LogView) Visible() bool { return view.isVisible }
-func (view *LogView) SetVisible(visible bool) {
-	view.isVisible = visible
-	obs := view.Obscura()
-	if nil != obs {
-		if view.isVisible {
-			obs.ResizeItem(view, 0, view.Proportion())
-		} else {
-			obs.ResizeItem(view, 2, 0)
-			if view.UI().pageControl.focusedView == view {
-				view.LockFocus(false)
-			}
-		}
-	}
-}
+// -----------------------------------------------------------------------------
+//  (pimm) LogView
+// -----------------------------------------------------------------------------

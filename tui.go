@@ -28,11 +28,11 @@ const (
 type UIView interface {
 	UI() *UI
 	FocusRune() rune
-	LockFocus(bool)
+	Obscura() *tview.Flex
+	Proportion() int
 	Visible() bool
 	SetVisible(bool)
-	Proportion() int
-	Obscura() *tview.Flex
+	LockFocus(bool)
 }
 
 type UI struct {
@@ -40,7 +40,7 @@ type UI struct {
 
 	sigDraw chan interface{}
 
-	media map[string]*MediaRef
+	media map[string]*MediaInfo
 
 	focusLocked      bool
 	focusLockedView  UIView
@@ -60,7 +60,7 @@ type PageControl struct {
 	focusedView tview.Primitive
 }
 
-type MediaRef struct {
+type MediaInfo struct {
 	library       *Library
 	media         *Media
 	libraryNode   *tview.TreeNode
@@ -68,8 +68,8 @@ type MediaRef struct {
 	playlistIndex int
 }
 
-func NewMediaRef(library *Library, media *Media) *MediaRef {
-	return &MediaRef{
+func NewMediaInfo(library *Library, media *Media) *MediaInfo {
+	return &MediaInfo{
 		library:       library,
 		media:         media,
 		libraryNode:   nil,
@@ -78,7 +78,7 @@ func NewMediaRef(library *Library, media *Media) *MediaRef {
 	}
 }
 
-func (ref *MediaRef) String() string {
+func (ref *MediaInfo) String() string {
 	return fmt.Sprintf("%s: %s", ref.library, ref.media)
 }
 
@@ -152,7 +152,7 @@ func NewUI(opt *Options) *UI {
 
 		sigDraw: sigDraw,
 
-		media: make(map[string]*MediaRef),
+		media: make(map[string]*MediaInfo),
 
 		focusLocked:     false,
 		focusLockedView: nil,
@@ -257,12 +257,10 @@ func (ui *UI) GlobalInputHandled(
 	view UIView, event *tcell.EventKey, setFocus func(p tview.Primitive)) bool {
 
 	inKey := event.Key()
-	inMods := event.Modifiers()
-	//inName := event.Name()
+	inMask := event.Modifiers()
 	inRune := event.Rune()
-	//inWhen := event.When()
 
-	switch inMods {
+	switch inMask {
 
 	case tcell.ModShift:
 	case tcell.ModCtrl:
@@ -321,6 +319,10 @@ func (ui *UI) GlobalInputHandled(
 
 	return false
 }
+
+// -----------------------------------------------------------------------------
+//	(pimm) LibraryView
+// -----------------------------------------------------------------------------
 
 func (ui *UI) AddLibrary(library *Library) {
 	ui.libraryView.AddLibrary(library)

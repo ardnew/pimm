@@ -7,6 +7,11 @@ import (
 	"github.com/rivo/tview"
 )
 
+type NodeInfo struct {
+	parent *tview.TreeNode
+	path   string
+}
+
 type LibraryView struct {
 	*tview.TreeView
 	ui         interface{}
@@ -42,38 +47,34 @@ func NewLibraryView(container *tview.Flex) *LibraryView {
 	return libraryView
 }
 
-func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-	return view.WrapInputHandler(
-		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			if view.UI().GlobalInputHandled(view, event, setFocus) {
-				return
-			}
-			view.TreeView.InputHandler()(event, setFocus)
-		})
-}
-
-func (view *LibraryView) Focus(delegate func(p tview.Primitive)) {
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[true])
-		view.SetBorderColor(view.UI().focusBorderColor[true])
-	}
-	view.TreeView.Focus(delegate)
-}
-
-func (view *LibraryView) Blur() {
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[false])
-		view.SetBorderColor(view.UI().focusBorderColor[false])
-	}
-	view.TreeView.Blur()
-}
+// -----------------------------------------------------------------------------
+//  (pimm) UIView interface
+// -----------------------------------------------------------------------------
 
 func (view *LibraryView) UI() *UI              { return view.ui.(*UI) }
 func (view *LibraryView) FocusRune() rune      { return view.focusRune }
 func (view *LibraryView) Obscura() *tview.Flex { return view.obscura }
 func (view *LibraryView) Proportion() int      { return view.proportion }
+func (view *LibraryView) Visible() bool        { return view.isVisible }
+
+func (view *LibraryView) SetVisible(visible bool) {
+
+	view.isVisible = visible
+	obs := view.Obscura()
+	if nil != obs {
+		if visible {
+			obs.ResizeItem(view, 0, view.Proportion())
+		} else {
+			obs.ResizeItem(view, 2, 0)
+			//if view.ui.pageControl.focusedView == view {
+			//	view.LockFocus(false)
+			//}
+		}
+	}
+}
 
 func (view *LibraryView) LockFocus(lock bool) {
+
 	view.UI().focusLocked = lock
 	view.UI().focusLockedView = view
 	if lock {
@@ -83,21 +84,82 @@ func (view *LibraryView) LockFocus(lock bool) {
 	}
 }
 
-func (view *LibraryView) Visible() bool { return view.isVisible }
-func (view *LibraryView) SetVisible(visible bool) {
-	view.isVisible = visible
-	obs := view.Obscura()
-	if nil != obs {
-		if visible {
-			obs.ResizeItem(view, 0, view.Proportion())
-		} else {
-			obs.ResizeItem(view, 2, 0)
-			if view.UI().pageControl.focusedView == view {
-				view.LockFocus(false)
-			}
-		}
+// -----------------------------------------------------------------------------
+//  (tview) embedded Primitive.(TreeView)
+// -----------------------------------------------------------------------------
+
+func (view *LibraryView) Focus(delegate func(p tview.Primitive)) {
+
+	if nil != view.ui {
+		view.SetTitleColor(view.UI().focusTitleColor[true])
+		view.SetBorderColor(view.UI().focusBorderColor[true])
 	}
+	view.TreeView.Focus(delegate)
 }
+
+func (view *LibraryView) Blur() {
+
+	if nil != view.ui {
+		view.SetTitleColor(view.UI().focusTitleColor[false])
+		view.SetBorderColor(view.UI().focusBorderColor[false])
+	}
+	view.TreeView.Blur()
+}
+
+func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.UI().GlobalInputHandled(view, event, setFocus) {
+				return
+			}
+
+			inputHandled := false
+
+			currNode := view.GetCurrentNode()
+			currInfo := currNode.GetReference().(*NodeInfo)
+
+			switch mask := event.Modifiers(); mask {
+
+			case tcell.ModAlt:
+				rootNode := view.GetRoot()
+				switch event.Key() {
+				case tcell.KeyLeft:
+					children := rootNode.GetChildren()
+					for _, child := range children {
+						child.CollapseAll()
+					}
+					inputHandled = true
+				case tcell.KeyRight:
+					currNode.ExpandAll()
+					inputHandled = true
+				}
+
+			case tcell.ModNone:
+				switch event.Key() {
+				case tcell.KeyLeft:
+					if nil != currInfo.parent {
+						view.SetCurrentNode(currInfo.parent)
+						currInfo.parent.Collapse()
+					} else {
+						currNode.Collapse()
+					}
+					inputHandled = true
+				case tcell.KeyRight:
+					currNode.Expand()
+				}
+			}
+
+			if !inputHandled {
+			}
+			view.TreeView.InputHandler()(event, setFocus)
+			//}
+		})
+}
+
+// -----------------------------------------------------------------------------
+//  (pimm) LibraryView
+// -----------------------------------------------------------------------------
 
 func nodeSelected(node *tview.TreeNode) {
 
@@ -108,7 +170,8 @@ func (view *LibraryView) AddLibrary(library *Library) {
 
 	node := tview.NewTreeNode(library.Name())
 	node.SetSelectable(true)
-	node.SetExpanded(true)
+	node.Expand()
+	node.SetReference(&NodeInfo{nil, library.Path()})
 
 	root := view.GetRoot()
 	root.AddChild(node)
@@ -124,11 +187,13 @@ func (view *LibraryView) AddLibraryDirectory(library *Library, dir string) {
 	node := tview.NewTreeNode(path.Base(dir))
 
 	parent.AddChild(node)
-	node.SetExpanded(true)
+	node.Collapse()
+	node.SetReference(&NodeInfo{parent, dir})
 
 	libIndex[dir] = node
 }
 
 func (view *LibraryView) AddMedia(library *Library, media *Media) {
+
 	infoLog.Logf("discovered: %s", media)
 }

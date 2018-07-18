@@ -28,7 +28,7 @@ type Option struct {
 	string
 }
 
-// singleton struct containing current values of all defined command line options
+// struct defining the collection of all command line options
 type Options struct {
 	*flag.FlagSet
 	UsageHelp Option

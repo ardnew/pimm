@@ -31,49 +31,18 @@ func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
 	return mediaDetailView
 }
 
-func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-	return view.WrapInputHandler(
-		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			if view.UI().GlobalInputHandled(view, event, setFocus) {
-				return
-			}
-			view.Form.InputHandler()(event, setFocus)
-		})
-}
-
-func (view *MediaDetailView) Focus(delegate func(p tview.Primitive)) {
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[true])
-		view.SetBorderColor(view.UI().focusBorderColor[true])
-	}
-	view.Form.Focus(delegate)
-}
-
-func (view *MediaDetailView) Blur() {
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[false])
-		view.SetBorderColor(view.UI().focusBorderColor[false])
-	}
-	view.Form.Blur()
-}
+// -----------------------------------------------------------------------------
+//  (pimm) UIView interface
+// -----------------------------------------------------------------------------
 
 func (view *MediaDetailView) UI() *UI              { return view.ui.(*UI) }
 func (view *MediaDetailView) FocusRune() rune      { return view.focusRune }
 func (view *MediaDetailView) Obscura() *tview.Flex { return view.obscura }
 func (view *MediaDetailView) Proportion() int      { return view.proportion }
+func (view *MediaDetailView) Visible() bool        { return view.isVisible }
 
-func (view *MediaDetailView) LockFocus(lock bool) {
-	view.UI().focusLocked = lock
-	view.UI().focusLockedView = view
-	if lock {
-		view.SetBorderColor(tcell.ColorDodgerBlue)
-	} else {
-		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
-	}
-}
-
-func (view *MediaDetailView) Visible() bool { return view.isVisible }
 func (view *MediaDetailView) SetVisible(visible bool) {
+
 	view.isVisible = visible
 	obs := view.Obscura()
 	if nil != obs {
@@ -87,3 +56,51 @@ func (view *MediaDetailView) SetVisible(visible bool) {
 		}
 	}
 }
+
+func (view *MediaDetailView) LockFocus(lock bool) {
+
+	view.UI().focusLocked = lock
+	view.UI().focusLockedView = view
+	if lock {
+		view.SetBorderColor(tcell.ColorDodgerBlue)
+	} else {
+		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
+	}
+}
+
+// -----------------------------------------------------------------------------
+//  (tview) embedded Primitive.(Form)
+// -----------------------------------------------------------------------------
+
+func (view *MediaDetailView) Focus(delegate func(p tview.Primitive)) {
+
+	if nil != view.ui {
+		view.SetTitleColor(view.UI().focusTitleColor[true])
+		view.SetBorderColor(view.UI().focusBorderColor[true])
+	}
+	view.Form.Focus(delegate)
+}
+
+func (view *MediaDetailView) Blur() {
+
+	if nil != view.ui {
+		view.SetTitleColor(view.UI().focusTitleColor[false])
+		view.SetBorderColor(view.UI().focusBorderColor[false])
+	}
+	view.Form.Blur()
+}
+
+func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+
+	return view.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.UI().GlobalInputHandled(view, event, setFocus) {
+				return
+			}
+			view.Form.InputHandler()(event, setFocus)
+		})
+}
+
+// -----------------------------------------------------------------------------
+//  (pimm) MediaDetailView
+// -----------------------------------------------------------------------------
