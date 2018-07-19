@@ -82,13 +82,9 @@ func (ref *MediaInfo) String() string {
 	return fmt.Sprintf("%s: %s", ref.library, ref.media)
 }
 
-type ViewPrimitive struct {
-	view UIView
-	prim tview.Primitive
-}
-
 var (
-	focusKeyView = map[rune]ViewPrimitive{}
+	focusKeyView = map[rune]UIView{}
+	focusKeyPrim = map[rune]tview.Primitive{}
 )
 
 func NewUI(opt *Options) *UI {
@@ -137,12 +133,17 @@ func NewUI(opt *Options) *UI {
 	//
 	// construct reference table for focus key handlers
 	//
-	focusKeyView[libraryView.FocusRune()] = ViewPrimitive{libraryView, libraryView}
-	focusKeyView[mediaView.FocusRune()] = ViewPrimitive{mediaView, mediaView}
-	focusKeyView[mediaDetailView.FocusRune()] = ViewPrimitive{mediaDetailView, mediaDetailView}
-	focusKeyView[playlistView.FocusRune()] = ViewPrimitive{playlistView, playlistView}
-	focusKeyView[logView.FocusRune()] = ViewPrimitive{logView, logView}
+	focusKeyView[libraryView.FocusRune()] = libraryView
+	focusKeyView[mediaView.FocusRune()] = mediaView
+	focusKeyView[mediaDetailView.FocusRune()] = mediaDetailView
+	focusKeyView[playlistView.FocusRune()] = playlistView
+	focusKeyView[logView.FocusRune()] = logView
 
+	focusKeyPrim[libraryView.FocusRune()] = libraryView
+	focusKeyPrim[mediaView.FocusRune()] = mediaView
+	focusKeyPrim[mediaDetailView.FocusRune()] = mediaDetailView
+	focusKeyPrim[playlistView.FocusRune()] = playlistView
+	focusKeyPrim[logView.FocusRune()] = logView
 	//
 	// layout definition of entire UI
 	//
@@ -260,6 +261,9 @@ func (ui *UI) GlobalInputHandled(
 	inMask := event.Modifiers()
 	inRune := event.Rune()
 
+	focusPrim, primOK := focusKeyPrim[inRune]
+	focusView, viewOK := focusKeyView[inRune]
+
 	switch inMask {
 
 	case tcell.ModShift:
@@ -274,11 +278,9 @@ func (ui *UI) GlobalInputHandled(
 
 	case tcell.ModAlt:
 
-		switch target, ok := focusKeyView[inRune]; {
-
-		case ok:
-			target.view.SetVisible(!target.view.Visible())
-
+		// focused, ok := focusKeyView[inRune]
+		if viewOK {
+			focusView.SetVisible(!focusView.Visible())
 		}
 
 	case tcell.ModMeta:
@@ -300,14 +302,13 @@ func (ui *UI) GlobalInputHandled(
 				return true
 
 			default:
-				if target, ok := focusKeyView[inRune]; ok {
-					if !ui.focusLocked {
-						infoLog.Logf("focused: %T", target.prim)
-						ui.pageControl.focusedView = target.prim
-						setFocus(target.prim)
-						target.view.SetVisible(true)
-						return true
-					}
+
+				if !ui.focusLocked && primOK {
+					infoLog.Logf("focused: %T", focusPrim)
+					ui.pageControl.focusedView = focusPrim
+					setFocus(focusPrim)
+					focusView.SetVisible(true)
+					return true
 				}
 			}
 
