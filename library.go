@@ -178,7 +178,7 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 	}
 
 	// if we made it here, we have a regular file. add it as a media candidate
-	media, errCode := NewMedia(fileInfo, currPath)
+	media, errCode := NewMedia(l, fileInfo, currPath)
 	if nil != errCode {
 		return errCode
 	}

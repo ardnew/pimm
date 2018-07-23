@@ -1,12 +1,20 @@
 package main
 
 import (
+	"sync"
+	"time"
+
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 )
 
+const (
+	PopulateCycleDuration = 10 * time.Millisecond
+)
+
 type MediaView struct {
 	*tview.Table
+	sync.Mutex
 	ui         interface{}
 	obscura    *tview.Flex
 	proportion int
@@ -18,6 +26,7 @@ func NewMediaView(container *tview.Flex) *MediaView {
 
 	mediaView := &MediaView{
 		Table:      tview.NewTable(),
+		Mutex:      sync.Mutex{},
 		ui:         nil,
 		obscura:    container,
 		proportion: 3,
@@ -28,6 +37,7 @@ func NewMediaView(container *tview.Flex) *MediaView {
 	container.SetBorder(true)
 	mediaView.SetTitle("")
 	mediaView.SetBorder(false)
+	mediaView.SetBorderColor(tcell.ColorDarkGray)
 	mediaView.SetBorders(false)
 	mediaView.SetSelectable(true /*rows*/, false /*cols*/)
 
@@ -43,6 +53,7 @@ func (view *MediaView) FocusRune() rune      { return view.focusRune }
 func (view *MediaView) Obscura() *tview.Flex { return view.obscura }
 func (view *MediaView) Proportion() int      { return view.proportion }
 func (view *MediaView) Visible() bool        { return view.isVisible }
+func (view *MediaView) Resizable() bool      { return false }
 
 func (view *MediaView) SetVisible(visible bool) {
 
@@ -70,7 +81,8 @@ func (view *MediaView) LockFocus(lock bool) {
 	if lock {
 		view.Obscura().SetBorderColor(tcell.ColorDodgerBlue)
 	} else {
-		view.Obscura().SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
+		view.Obscura().SetBorderColor(
+			view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
 	}
 }
 
@@ -110,3 +122,29 @@ func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(
 // -----------------------------------------------------------------------------
 //  (pimm) MediaView
 // -----------------------------------------------------------------------------
+
+func (view *MediaView) appendMedia(media *Media) {
+
+	nameCell := tview.NewTableCell(media.Name())
+	libCell := tview.NewTableCell(media.library.Name())
+	dateCell := tview.NewTableCell(media.MTimeStr())
+
+	view.Lock()
+	row := view.GetRowCount()
+	view.SetCell(row, 0, nameCell)
+	view.SetCell(row, 1, libCell)
+	view.SetCell(row, 2, dateCell)
+	view.Unlock()
+	//view.UI().app.Draw()
+}
+
+func (view *MediaView) AddMedia(media *Media) {
+
+	//view.SetCell(view.numRows, 0, nameCell)
+	//view.SetCell(view.numRows, 1, libCell)
+	//view.SetCell(view.numRows, 2, dateCell)
+	//view.cellChan <- &CellPosition{view.numRows, 0, nameCell}
+	//view.cellChan <- &CellPosition{view.numRows, 1, dateCell}
+
+	view.appendMedia(media)
+}

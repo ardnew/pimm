@@ -2,24 +2,24 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
+	//"io/ioutil"
 	"os"
 	"path"
 	"time"
-
-	"github.com/cespare/xxhash"
+	//"github.com/cespare/xxhash"
 )
 
 type Media struct {
-	dir   string
-	name  string
-	path  string
-	size  int64
-	mtime time.Time
-	hash  uint64
+	dir     string
+	name    string
+	path    string
+	size    int64
+	mtime   time.Time
+	hash    uint64
+	library *Library
 }
 
-func NewMedia(info os.FileInfo, absPath string) (*Media, *ErrorCode) {
+func NewMedia(library *Library, info os.FileInfo, absPath string) (*Media, *ErrorCode) {
 
 	fh, err := os.Open(absPath)
 	if nil != err {
@@ -27,28 +27,29 @@ func NewMedia(info os.FileInfo, absPath string) (*Media, *ErrorCode) {
 	}
 	defer fh.Close()
 
-	bytes, err := ioutil.ReadAll(fh)
-	if nil != err {
-		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to compute file hash: %q", absPath))
-	}
+	//bytes, err := ioutil.ReadAll(fh)
+	//if nil != err {
+	//	return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to compute file hash: %q", absPath))
+	//}
 
 	// TBD: spawn the checksum calculation off on its own
-	done := make(chan uint64)
-	go func(bytes []byte) {
-		done <- xxhash.Sum64(bytes)
-	}(bytes)
-	hash := <-done
+	//done := make(chan uint64)
+	//go func(bytes []byte) {
+	//	done <- xxhash.Sum64(bytes)
+	//}(bytes)
+	hash := uint64(0)
 
 	dir := path.Dir(absPath)
 	name := path.Base(absPath)
 
 	return &Media{
-		dir:   dir,
-		name:  name,
-		path:  absPath,
-		size:  info.Size(),
-		mtime: info.ModTime().Local(),
-		hash:  hash,
+		dir:     dir,
+		name:    name,
+		path:    absPath,
+		size:    info.Size(),
+		mtime:   info.ModTime().Local(),
+		hash:    hash,
+		library: library,
 	}, nil
 }
 

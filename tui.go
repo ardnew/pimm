@@ -31,6 +31,7 @@ type UIView interface {
 	Obscura() *tview.Flex
 	Proportion() int
 	Visible() bool
+	Resizable() bool
 	SetVisible(bool)
 	LockFocus(bool)
 }
@@ -108,6 +109,17 @@ func NewUI(opt *Options) *UI {
 	playlistView := NewPlaylistView(browseColsLayout)
 	logView := NewLogView(browseMainLayout)
 
+	toolbarView := tview.NewGrid()
+	toolbarView.SetBorders(false)
+
+	helpTab := tview.NewButton("Help (h)")
+	helpTab.SetBorder(false)
+	toolbarView.AddItem(helpTab, 0, 0, 1, 1, 1, 1, false)
+	for i := 1; i < 10; i++ {
+		toolbarView.AddItem(tview.NewBox(), 0, i, 1, 1, 1, 1, false)
+	}
+	toolbarView.SetRows(1)
+
 	//
 	// composition of container views
 	//
@@ -118,6 +130,7 @@ func NewUI(opt *Options) *UI {
 	browseColsLayout.AddItem(mediaRowsLayout, 0, 2, false)
 	browseColsLayout.AddItem(playlistView, 0, playlistView.Proportion(), false)
 
+	browseMainLayout.AddItem(toolbarView, 1, 0, false)
 	browseMainLayout.AddItem(browseColsLayout, 0, 3, false)
 	browseMainLayout.AddItem(logView, 0, logView.Proportion(), false)
 
@@ -277,10 +290,10 @@ func (ui *UI) GlobalInputHandled(
 		}
 
 	case tcell.ModAlt:
-
-		// focused, ok := focusKeyView[inRune]
 		if viewOK {
-			focusView.SetVisible(!focusView.Visible())
+			if focusView.Resizable() {
+				focusView.SetVisible(!focusView.Visible())
+			}
 		}
 
 	case tcell.ModMeta:
@@ -333,7 +346,7 @@ func (ui *UI) AddLibraryDirectory(library *Library, dir string) {
 	ui.libraryView.AddLibraryDirectory(library, dir)
 	ui.sigDraw <- ui.libraryView
 }
-func (ui *UI) AddMedia(library *Library, media *Media) {
-	ui.libraryView.AddMedia(library, media)
-	ui.sigDraw <- ui.libraryView
+func (ui *UI) AddMedia(media *Media) {
+	ui.mediaView.AddMedia(media)
+	ui.sigDraw <- ui.mediaView
 }

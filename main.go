@@ -8,6 +8,7 @@ import (
 	"path"
 	"regexp"
 	"sync"
+	"time"
 )
 
 // READ-ONLY (plz)! globals initialized in Makefile
@@ -143,19 +144,23 @@ func populateLibrary(options *Options, library []*Library, ui *UI) {
 				case subdir := <-lib.SigDir():
 					ui.AddLibraryDirectory(lib, subdir)
 				case media := <-lib.SigMedia():
-					ui.AddMedia(lib, media)
+					ui.AddMedia(media)
 				}
 			}
 		}(lib, ui)
 	}
 
 	for _, lib := range library {
-		infoLog.Logf("scanning library: %s", lib)
+		infoLog.Logf("initiating scan: %q", lib.Name())
 		go func(lib *Library) {
+			start := time.Now()
 			err := lib.Scan()
+			delta := time.Since(start)
 			if nil != err {
 				errLog.Log(err)
 			}
+			infoLog.Logf("finished scan: %q (%s)",
+				lib.Name(), delta.Round(time.Millisecond))
 		}(lib)
 	}
 }

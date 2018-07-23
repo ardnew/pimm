@@ -46,6 +46,7 @@ func (view *LogView) FocusRune() rune      { return view.focusRune }
 func (view *LogView) Obscura() *tview.Flex { return view.obscura }
 func (view *LogView) Proportion() int      { return view.proportion }
 func (view *LogView) Visible() bool        { return view.isVisible }
+func (view *LogView) Resizable() bool      { return true }
 
 func (view *LogView) SetVisible(visible bool) {
 	view.isVisible = visible

@@ -40,6 +40,7 @@ func (view *MediaDetailView) FocusRune() rune      { return view.focusRune }
 func (view *MediaDetailView) Obscura() *tview.Flex { return view.obscura }
 func (view *MediaDetailView) Proportion() int      { return view.proportion }
 func (view *MediaDetailView) Visible() bool        { return view.isVisible }
+func (view *MediaDetailView) Resizable() bool      { return true }
 
 func (view *MediaDetailView) SetVisible(visible bool) {
 

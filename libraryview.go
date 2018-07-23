@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path"
 
 	"github.com/gdamore/tcell"
@@ -40,7 +41,13 @@ func NewLibraryView(container *tview.Flex) *LibraryView {
 	libraryView.SetSelectedFunc(nodeSelected)
 	libraryView.SetChangedFunc(nil)
 
-	root := tview.NewTreeNode("Library").SetSelectable(false)
+	host, err := os.Hostname()
+	if err != nil {
+		warnLog.Logf("failed to get hostname: %s", err)
+		host = "localhost"
+	}
+
+	root := tview.NewTreeNode(host).SetSelectable(false)
 	libraryView.SetRoot(root)
 	libraryView.SetCurrentNode(root)
 
@@ -56,6 +63,7 @@ func (view *LibraryView) FocusRune() rune      { return view.focusRune }
 func (view *LibraryView) Obscura() *tview.Flex { return view.obscura }
 func (view *LibraryView) Proportion() int      { return view.proportion }
 func (view *LibraryView) Visible() bool        { return view.isVisible }
+func (view *LibraryView) Resizable() bool      { return false }
 
 func (view *LibraryView) SetVisible(visible bool) {
 
@@ -122,12 +130,12 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 			switch mask := event.Modifiers(); mask {
 
 			case tcell.ModAlt:
-				rootNode := view.GetRoot()
+
 				switch event.Key() {
 				case tcell.KeyLeft:
-					children := rootNode.GetChildren()
-					for _, child := range children {
-						child.CollapseAll()
+					for n := currNode; nil != n; {
+						n.Collapse()
+						n = n.GetReference().(*NodeInfo).parent
 					}
 					inputHandled = true
 				case tcell.KeyRight:
@@ -136,9 +144,12 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 				}
 
 			case tcell.ModNone:
+
 				switch event.Key() {
 				case tcell.KeyLeft:
-					if nil != currInfo.parent {
+					children := currNode.GetChildren()
+					isExpanded := currNode.IsExpanded() && len(children) > 0
+					if nil != currInfo.parent && !isExpanded {
 						view.SetCurrentNode(currInfo.parent)
 						currInfo.parent.Collapse()
 					} else {
@@ -151,9 +162,8 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 			}
 
 			if !inputHandled {
+				view.TreeView.InputHandler()(event, setFocus)
 			}
-			view.TreeView.InputHandler()(event, setFocus)
-			//}
 		})
 }
 
@@ -170,7 +180,7 @@ func (view *LibraryView) AddLibrary(library *Library) {
 
 	node := tview.NewTreeNode(library.Name())
 	node.SetSelectable(true)
-	node.Expand()
+	node.Collapse()
 	node.SetReference(&NodeInfo{nil, library.Path()})
 
 	root := view.GetRoot()
@@ -191,9 +201,4 @@ func (view *LibraryView) AddLibraryDirectory(library *Library, dir string) {
 	node.SetReference(&NodeInfo{parent, dir})
 
 	libIndex[dir] = node
-}
-
-func (view *LibraryView) AddMedia(library *Library, media *Media) {
-
-	infoLog.Logf("discovered: %s", media)
 }

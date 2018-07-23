@@ -40,6 +40,7 @@ func (view *PlaylistView) FocusRune() rune      { return view.focusRune }
 func (view *PlaylistView) Obscura() *tview.Flex { return view.obscura }
 func (view *PlaylistView) Proportion() int      { return view.proportion }
 func (view *PlaylistView) Visible() bool        { return view.isVisible }
+func (view *PlaylistView) Resizable() bool      { return true }
 
 func (view *PlaylistView) SetVisible(visible bool) {
 
