@@ -27,12 +27,11 @@ func NewMedia(library *Library, info os.FileInfo, absPath string) (*Media, *Erro
 	}
 	defer fh.Close()
 
+	// TBD: spawn the checksum calculation off on its own
 	//bytes, err := ioutil.ReadAll(fh)
 	//if nil != err {
 	//	return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to compute file hash: %q", absPath))
 	//}
-
-	// TBD: spawn the checksum calculation off on its own
 	//done := make(chan uint64)
 	//go func(bytes []byte) {
 	//	done <- xxhash.Sum64(bytes)

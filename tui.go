@@ -22,6 +22,7 @@ const (
 	MediaDetailFocusRune = 'i'
 	PlaylistFocusRune    = 'p'
 	LogFocusRune         = 'v'
+	HelpRune             = 'h'
 	QuitRune             = 'q'
 )
 
@@ -53,6 +54,7 @@ type UI struct {
 	mediaDetailView *MediaDetailView
 	playlistView    *PlaylistView
 	logView         *LogView
+	helpView        *HelpView
 	pageControl     *PageControl
 }
 
@@ -108,17 +110,7 @@ func NewUI(opt *Options) *UI {
 	mediaDetailView := NewMediaDetailView(mediaRowsLayout)
 	playlistView := NewPlaylistView(browseColsLayout)
 	logView := NewLogView(browseMainLayout)
-
-	toolbarView := tview.NewGrid()
-	toolbarView.SetBorders(false)
-
-	helpTab := tview.NewButton("Help (h)")
-	helpTab.SetBorder(false)
-	toolbarView.AddItem(helpTab, 0, 0, 1, 1, 1, 1, false)
-	for i := 1; i < 10; i++ {
-		toolbarView.AddItem(tview.NewBox(), 0, i, 1, 1, 1, 1, false)
-	}
-	toolbarView.SetRows(1)
+	helpView := NewHelpView(browseMainLayout)
 
 	//
 	// composition of container views
@@ -130,9 +122,9 @@ func NewUI(opt *Options) *UI {
 	browseColsLayout.AddItem(mediaRowsLayout, 0, 2, false)
 	browseColsLayout.AddItem(playlistView, 0, playlistView.Proportion(), false)
 
-	browseMainLayout.AddItem(toolbarView, 1, 0, false)
 	browseMainLayout.AddItem(browseColsLayout, 0, 3, false)
 	browseMainLayout.AddItem(logView, 0, logView.Proportion(), false)
+	browseMainLayout.AddItem(helpView, 0, helpView.Proportion(), false)
 
 	//
 	// root-level container selects which app page to display
@@ -151,12 +143,15 @@ func NewUI(opt *Options) *UI {
 	focusKeyView[mediaDetailView.FocusRune()] = mediaDetailView
 	focusKeyView[playlistView.FocusRune()] = playlistView
 	focusKeyView[logView.FocusRune()] = logView
+	focusKeyView[helpView.FocusRune()] = helpView
 
 	focusKeyPrim[libraryView.FocusRune()] = libraryView
 	focusKeyPrim[mediaView.FocusRune()] = mediaView
 	focusKeyPrim[mediaDetailView.FocusRune()] = mediaDetailView
 	focusKeyPrim[playlistView.FocusRune()] = playlistView
 	focusKeyPrim[logView.FocusRune()] = logView
+	focusKeyPrim[helpView.FocusRune()] = helpView
+
 	//
 	// layout definition of entire UI
 	//
@@ -184,6 +179,7 @@ func NewUI(opt *Options) *UI {
 		mediaDetailView: mediaDetailView,
 		playlistView:    playlistView,
 		logView:         logView,
+		helpView:        helpView,
 		pageControl:     pageControl,
 	}
 
@@ -203,6 +199,9 @@ func NewUI(opt *Options) *UI {
 	ui.mediaDetailView.ui = ui
 	ui.playlistView.ui = ui
 	ui.logView.ui = ui
+	ui.helpView.ui = ui
+
+	ui.helpView.SetVisible(false)
 
 	go ui.DrawCycle()
 
@@ -246,6 +245,8 @@ func (ui *UI) DrawCycle() {
 type ModalView struct {
 	*tview.Modal
 }
+
+func isHelpEventKeyRune(keyRune rune) bool { return HelpRune == keyRune }
 
 func isQuitEventKeyRune(keyRune rune) bool { return QuitRune == keyRune }
 func (ui *UI) ConfirmQuitPrompt() {
@@ -314,19 +315,18 @@ func (ui *UI) GlobalInputHandled(
 				ui.ConfirmQuitPrompt()
 				return true
 
-			default:
+			case primOK && isHelpEventKeyRune(inRune):
+				focusView.SetVisible(!focusView.Visible())
+				return true
 
-				if !ui.focusLocked && primOK {
-					infoLog.Logf("focused: %T", focusPrim)
-					ui.pageControl.focusedView = focusPrim
-					setFocus(focusPrim)
-					focusView.SetVisible(true)
-					return true
-				}
+			case primOK && !ui.focusLocked:
+				ui.pageControl.focusedView = focusPrim
+				setFocus(focusPrim)
+				focusView.SetVisible(true)
+				return true
 			}
 
 		default:
-			// nothing
 		}
 
 	}

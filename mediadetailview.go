@@ -5,6 +5,19 @@ import (
 	"github.com/rivo/tview"
 )
 
+const (
+	MDLibrary int = iota
+	MDName
+	MDSize
+	MDModTime
+	MDType
+	MDCommand
+)
+
+type DetailFormItem struct {
+	tview.InputField
+}
+
 type MediaDetailView struct {
 	*tview.Form
 	ui         interface{}
@@ -12,6 +25,7 @@ type MediaDetailView struct {
 	proportion int
 	isVisible  bool
 	focusRune  rune
+	media      *Media
 }
 
 func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
@@ -27,6 +41,25 @@ func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
 	mediaDetailView.SetTitle(" Info (i) ")
 	mediaDetailView.SetBorder(true)
 	mediaDetailView.SetHorizontal(false)
+
+	mediaDetailView.Form.AddInputField("Library", "", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	mediaDetailView.Form.AddInputField("Name", "", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	mediaDetailView.Form.AddInputField("Size", "", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	mediaDetailView.Form.AddInputField("ModTime", "", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	mediaDetailView.Form.AddInputField("Type", "", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	mediaDetailView.Form.AddInputField("Command", "", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
 
 	return mediaDetailView
 }
@@ -105,3 +138,15 @@ func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus
 // -----------------------------------------------------------------------------
 //  (pimm) MediaDetailView
 // -----------------------------------------------------------------------------
+
+func (view *MediaDetailView) SetMedia(media *Media) {
+
+	view.media = media
+
+	view.Form.GetFormItem(MDLibrary)
+	view.Form.GetFormItem(MDName)
+	view.Form.GetFormItem(MDSize)
+	view.Form.GetFormItem(MDModTime)
+	view.Form.GetFormItem(MDType)
+	view.Form.GetFormItem(MDCommand)
+}
