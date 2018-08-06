@@ -6,10 +6,11 @@ import (
 )
 
 const (
-	MDLibrary int = iota
-	MDName
+	MDName int = iota
 	MDSize
 	MDModTime
+	MDLibrary
+	MDSubtitles
 	MDType
 	MDCommand
 )
@@ -23,6 +24,8 @@ type MediaDetailView struct {
 	ui         interface{}
 	obscura    *tview.Flex
 	proportion int
+	absolute   int
+	isAbsolute bool
 	isVisible  bool
 	focusRune  rune
 	media      *Media
@@ -34,32 +37,20 @@ func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
 		Form:       tview.NewForm(),
 		ui:         nil,
 		obscura:    container,
-		proportion: 1,
+		proportion: 0,
+		absolute:   11,
+		isAbsolute: true,
 		isVisible:  true,
 		focusRune:  MediaDetailFocusRune,
 	}
 	mediaDetailView.SetTitle(" Info (i) ")
 	mediaDetailView.SetBorder(true)
 	mediaDetailView.SetHorizontal(false)
+	mediaDetailView.SetItemPadding(0)
 
-	mediaDetailView.Form.AddInputField("Library", "", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	mediaDetailView.Form.AddInputField("Name", "", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	mediaDetailView.Form.AddInputField("Size", "", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	mediaDetailView.Form.AddInputField("ModTime", "", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	mediaDetailView.Form.AddInputField("Type", "", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	mediaDetailView.Form.AddInputField("Command", "", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
+	mediaDetailView.SetFieldBackgroundColor(tcell.ColorDarkSlateGray)
+	mediaDetailView.SetFieldTextColor(tcell.ColorWhite)
+	mediaDetailView.SetLabelColor(tcell.ColorBlue)
 
 	return mediaDetailView
 }
@@ -72,6 +63,8 @@ func (view *MediaDetailView) UI() *UI              { return view.ui.(*UI) }
 func (view *MediaDetailView) FocusRune() rune      { return view.focusRune }
 func (view *MediaDetailView) Obscura() *tview.Flex { return view.obscura }
 func (view *MediaDetailView) Proportion() int      { return view.proportion }
+func (view *MediaDetailView) Absolute() int        { return view.absolute }
+func (view *MediaDetailView) IsAbsolute() bool     { return view.isAbsolute }
 func (view *MediaDetailView) Visible() bool        { return view.isVisible }
 func (view *MediaDetailView) Resizable() bool      { return true }
 
@@ -81,7 +74,7 @@ func (view *MediaDetailView) SetVisible(visible bool) {
 	obs := view.Obscura()
 	if nil != obs {
 		if view.isVisible {
-			obs.ResizeItem(view, 0, view.Proportion())
+			obs.ResizeItem(view, view.Absolute(), view.Proportion())
 		} else {
 			obs.ResizeItem(view, 2, 0)
 			if view.UI().pageControl.focusedView == view {
@@ -128,6 +121,7 @@ func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus
 
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			infoLog.Log("+unhandled")
 			if view.UI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
@@ -143,10 +137,27 @@ func (view *MediaDetailView) SetMedia(media *Media) {
 
 	view.media = media
 
-	view.Form.GetFormItem(MDLibrary)
-	view.Form.GetFormItem(MDName)
-	view.Form.GetFormItem(MDSize)
-	view.Form.GetFormItem(MDModTime)
-	view.Form.GetFormItem(MDType)
-	view.Form.GetFormItem(MDCommand)
+	view.Clear(true)
+
+	view.Form.AddInputField("Name", media.Name(), 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	view.Form.AddInputField("Size", media.SizeStr(), 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	view.Form.AddInputField("ModTime", media.MTimeStr(), 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	view.Form.AddInputField("Library", media.library.Name(), 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	view.Form.AddInputField("Subtitles", "(sub)", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	view.Form.AddInputField("Type", "(ext)", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
+	view.Form.AddInputField("Command", "(cmd)", 0,
+		func(text string, last rune) bool { return false },
+		func(text string) {})
 }

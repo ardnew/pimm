@@ -82,7 +82,8 @@ func (m *Media) Size() int64 {
 }
 
 func (m *Media) SizeStr() string {
-	return fmt.Sprintf("%d", m.size)
+	//return fmt.Sprintf("%d", m.size)
+	return SizeStr(m.size)
 }
 
 func (m *Media) MTime() time.Time {

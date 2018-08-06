@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/gdamore/tcell"
@@ -31,6 +30,8 @@ type UIView interface {
 	FocusRune() rune
 	Obscura() *tview.Flex
 	Proportion() int
+	Absolute() int
+	IsAbsolute() bool
 	Visible() bool
 	Resizable() bool
 	SetVisible(bool)
@@ -38,11 +39,10 @@ type UIView interface {
 }
 
 type UI struct {
-	app *tview.Application
+	app     *tview.Application
+	options *Options
 
 	sigDraw chan interface{}
-
-	media map[string]*MediaInfo
 
 	focusLocked      bool
 	focusLockedView  UIView
@@ -63,32 +63,15 @@ type PageControl struct {
 	focusedView tview.Primitive
 }
 
-type MediaInfo struct {
-	library       *Library
-	media         *Media
-	libraryNode   *tview.TreeNode
-	mediaCell     *tview.TableCell
-	playlistIndex int
-}
-
-func NewMediaInfo(library *Library, media *Media) *MediaInfo {
-	return &MediaInfo{
-		library:       library,
-		media:         media,
-		libraryNode:   nil,
-		mediaCell:     nil,
-		playlistIndex: PlaylistIndexInvalid,
-	}
-}
-
-func (ref *MediaInfo) String() string {
-	return fmt.Sprintf("%s: %s", ref.library, ref.media)
-}
-
 var (
 	focusKeyView = map[rune]UIView{}
 	focusKeyPrim = map[rune]tview.Primitive{}
 )
+
+func ColorTransparent() (tcell.Color, string) {
+	// see: github.com/gdamore/tcell/styles.go
+	return tview.Styles.PrimitiveBackgroundColor, "black"
+}
 
 func NewUI(opt *Options) *UI {
 
@@ -116,7 +99,7 @@ func NewUI(opt *Options) *UI {
 	// composition of container views
 	//
 	mediaRowsLayout.AddItem(mediaView, 0, mediaView.Proportion(), false)
-	mediaRowsLayout.AddItem(mediaDetailView, 0, mediaDetailView.Proportion(), false)
+	mediaRowsLayout.AddItem(mediaDetailView, mediaDetailView.Absolute(), 0, false)
 
 	browseColsLayout.AddItem(libraryView, 0, libraryView.Proportion(), false)
 	browseColsLayout.AddItem(mediaRowsLayout, 0, 2, false)
@@ -157,21 +140,20 @@ func NewUI(opt *Options) *UI {
 	//
 	ui := &UI{
 
-		app: self,
+		app:     self,
+		options: opt,
 
 		sigDraw: sigDraw,
-
-		media: make(map[string]*MediaInfo),
 
 		focusLocked:     false,
 		focusLockedView: nil,
 		focusTitleColor: map[bool]tcell.Color{
-			false: tcell.ColorWhite,
-			true:  tcell.ColorDeepSkyBlue,
+			false: tcell.ColorBlanchedAlmond,
+			true:  tcell.ColorOrange,
 		},
 		focusBorderColor: map[bool]tcell.Color{
-			false: tcell.ColorWhite,
-			true:  tcell.ColorSteelBlue,
+			false: tcell.ColorLightSteelBlue,
+			true:  tcell.ColorBlue,
 		},
 
 		libraryView:     libraryView,
@@ -253,6 +235,8 @@ func (ui *UI) ConfirmQuitPrompt() {
 
 	modalView := &ModalView{Modal: tview.NewModal()}
 	modalView.SetText("Are you a quitter?")
+	modalView.Modal.SetBackgroundColor(tcell.ColorDeepSkyBlue)
+	modalView.Modal.SetBorderColor(tcell.ColorGreen)
 	modalView.AddButtons([]string{"Yes!", " No "})
 	modalView.SetDoneFunc(
 		func(buttonIndex int, buttonLabel string) {
@@ -346,7 +330,7 @@ func (ui *UI) AddLibraryDirectory(library *Library, dir string) {
 	ui.libraryView.AddLibraryDirectory(library, dir)
 	ui.sigDraw <- ui.libraryView
 }
-func (ui *UI) AddMedia(media *Media) {
-	ui.mediaView.AddMedia(media)
+func (ui *UI) AddMedia(library *Library, media *Media) {
+	ui.mediaView.AddMedia(library, media)
 	ui.sigDraw <- ui.mediaView
 }

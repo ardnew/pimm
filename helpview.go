@@ -1,14 +1,12 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 )
 
-type LogView struct {
-	*tview.TextView
+type HelpView struct {
+	*tview.Grid
 	ui         interface{}
 	obscura    *tview.Flex
 	proportion int
@@ -18,49 +16,51 @@ type LogView struct {
 	focusRune  rune
 }
 
-func NewLogView(container *tview.Flex) *LogView {
+func NewHelpView(container *tview.Flex) *HelpView {
 
-	logView := &LogView{
-		TextView:   tview.NewTextView(),
+	helpView := &HelpView{
+		Grid:       tview.NewGrid(),
 		ui:         nil,
 		obscura:    container,
-		proportion: 1,
-		absolute:   0,
-		isAbsolute: false,
+		proportion: 0,
+		absolute:   10,
+		isAbsolute: true,
 		isVisible:  true,
-		focusRune:  LogFocusRune,
+		focusRune:  HelpRune,
 	}
-	logView.SetTitle(" Log (v) ")
-	logView.SetBorder(true)
-	logView.SetDynamicColors(true)
-	logView.SetRegions(true)
-	logView.SetScrollable(true)
-	logView.SetWrap(false)
-	setLogWriter(logView)
+	helpView.SetTitle(" Help (h) ")
+	helpView.SetTitleAlign(tview.AlignLeft)
+	helpView.SetBorder(true)
 
-	return logView
+	return helpView
 }
 
 // -----------------------------------------------------------------------------
 //  (pimm) UIView interface
 // -----------------------------------------------------------------------------
 
-func (view *LogView) UI() *UI              { return view.ui.(*UI) }
-func (view *LogView) FocusRune() rune      { return view.focusRune }
-func (view *LogView) Obscura() *tview.Flex { return view.obscura }
-func (view *LogView) Proportion() int      { return view.proportion }
-func (view *LogView) Absolute() int        { return view.absolute }
-func (view *LogView) IsAbsolute() bool     { return view.isAbsolute }
-func (view *LogView) Visible() bool        { return view.isVisible }
-func (view *LogView) Resizable() bool      { return true }
+func (view *HelpView) UI() *UI              { return view.ui.(*UI) }
+func (view *HelpView) FocusRune() rune      { return view.focusRune }
+func (view *HelpView) Obscura() *tview.Flex { return view.obscura }
+func (view *HelpView) Proportion() int      { return view.proportion }
+func (view *HelpView) Absolute() int        { return view.absolute }
+func (view *HelpView) IsAbsolute() bool     { return view.isAbsolute }
+func (view *HelpView) Visible() bool        { return view.isVisible }
+func (view *HelpView) Resizable() bool      { return true }
 
-func (view *LogView) SetVisible(visible bool) {
+func (view *HelpView) SetVisible(visible bool) {
+
 	view.isVisible = visible
 	obs := view.Obscura()
 	if nil != obs {
 		if view.isVisible {
+			view.SetBorderColor(tcell.ColorWheat)
+			view.SetTitleColor(tcell.ColorOrange)
 			obs.ResizeItem(view, view.Absolute(), view.Proportion())
 		} else {
+			color, _ := ColorTransparent()
+			view.SetBorderColor(color)
+			view.SetTitleColor(tcell.ColorOrange)
 			obs.ResizeItem(view, 2, 0)
 			if view.UI().pageControl.focusedView == view {
 				view.LockFocus(false)
@@ -69,7 +69,8 @@ func (view *LogView) SetVisible(visible bool) {
 	}
 }
 
-func (view *LogView) LockFocus(lock bool) {
+func (view *HelpView) LockFocus(lock bool) {
+
 	view.UI().focusLocked = lock
 	view.UI().focusLockedView = view
 	if lock {
@@ -80,49 +81,38 @@ func (view *LogView) LockFocus(lock bool) {
 }
 
 // -----------------------------------------------------------------------------
-//  (tview) embedded Primitive.(TextView)
+//  (tview) embedded Primitive.(Grid)
 // -----------------------------------------------------------------------------
 
-func (view *LogView) Focus(delegate func(p tview.Primitive)) {
+func (view *HelpView) Focus(delegate func(p tview.Primitive)) {
+
 	if nil != view.ui {
 		view.SetTitleColor(view.UI().focusTitleColor[true])
 		view.SetBorderColor(view.UI().focusBorderColor[true])
 	}
-	view.TextView.Focus(delegate)
+	view.Grid.Focus(delegate)
 }
 
-func (view *LogView) Blur() {
+func (view *HelpView) Blur() {
+
 	if nil != view.ui {
 		view.SetTitleColor(view.UI().focusTitleColor[false])
 		view.SetBorderColor(view.UI().focusBorderColor[false])
 	}
-	view.TextView.Blur()
+	view.Grid.Blur()
 }
 
-func (view *LogView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+func (view *HelpView) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
 			if view.UI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
-			handled := false
-			switch event.Key() {
-			case tcell.KeyRune:
-				if ' ' == event.Rune() {
-					for n, c := range tcell.ColorNames {
-						v := tcell.ColorValues[c]
-						s := fmt.Sprintf("[#%06x] %24s: %10d 0x%08x [-:-:-]", v, n, v, v)
-						infoLog.Log(s)
-					}
-					handled = true
-				}
-			}
-			if !handled {
-				view.TextView.InputHandler()(event, setFocus)
-			}
+			view.Grid.InputHandler()(event, setFocus)
 		})
 }
 
 // -----------------------------------------------------------------------------
-//  (pimm) LogView
+//  (pimm) HelpView
 // -----------------------------------------------------------------------------

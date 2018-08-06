@@ -144,7 +144,7 @@ func populateLibrary(options *Options, library []*Library, ui *UI) {
 				case subdir := <-lib.SigDir():
 					ui.AddLibraryDirectory(lib, subdir)
 				case media := <-lib.SigMedia():
-					ui.AddMedia(media)
+					ui.AddMedia(lib, media)
 				}
 			}
 		}(lib, ui)

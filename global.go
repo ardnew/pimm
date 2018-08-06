@@ -83,13 +83,27 @@ var MoonPhase = [8]rune{'🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', 
 
 var (
 	treeNodePrefixExpanded = map[bool]StringContext{
-		false: { // collapsed
-			false: {false: "+", true: "+"},   // ASCII
+		// collapsed
+		false: { // plain        colored
+			false: {false: "+ ", true: "+ "}, // ASCII
 			true:  {false: "▶ ", true: "▶ "}, // UTF-8
 		},
-		true: { // expanded
-			false: {false: "-", true: "-"},   // ASCII
+		// expanded
+		true: { //  plain        colored
+			false: {false: "- ", true: "- "}, // ASCII
 			true:  {false: "▼ ", true: "▼ "}, // UTF-8
+		},
+	}
+	treeNodePrefixIncluded = map[bool]StringContext{
+		// not included
+		false: { // plain            colored
+			false: {false: "[gray]", true: "[gray]"}, // ASCII
+			true:  {false: "[gray]", true: "[gray]"}, // UTF-8
+		},
+		// included
+		true: { //  plain            colored
+			false: {false: "[blue]", true: "[blue]"}, // ASCII
+			true:  {false: "[blue]", true: "[blue]"}, // UTF-8
 		},
 	}
 	consoleLogPrefix = [consoleLogCount]StringContext{
@@ -98,15 +112,15 @@ var (
 			true:  {false: "", true: ""}, // UTF-8
 		},
 		{ // infoLogID
-			false: {false: " = ", true: " = "},               // ASCII
+			false: {false: " = ", true: " [green]=[white] "}, // ASCII
 			true:  {false: " » ", true: " [green]»[white] "}, // UTF-8
 		},
 		{ // warnLogID
-			false: {false: " * ", true: " * "},                // ASCII
+			false: {false: " * ", true: " [yellow]*[white] "}, // ASCII
 			true:  {false: " » ", true: " [yellow]»[white] "}, // UTF-8
 		},
 		{ // errLogID
-			false: {false: " ! ", true: " ! "},             // ASCII
+			false: {false: " ! ", true: " [red]![white] "}, // ASCII
 			true:  {false: " × ", true: " [red]×[white] "}, // UTF-8
 		},
 	}
@@ -220,4 +234,25 @@ func (l *ConsoleLog) Die(c *ErrorCode) {
 		l.Output(s)
 	}
 	os.Exit(c.Code)
+}
+
+func SizeStr(bytes int64) string {
+
+	kb := float32(bytes) / 1024.0
+	mb := float32(kb) / 1024.0
+	gb := float32(mb) / 1024.0
+	tb := float32(gb) / 1024.0
+
+	switch {
+	case uint64(tb) > 0:
+		return fmt.Sprintf("%.5g TiB", tb)
+	case uint64(gb) > 0:
+		return fmt.Sprintf("%.5g GiB", gb)
+	case uint64(mb) > 0:
+		return fmt.Sprintf("%.5g MiB", mb)
+	case uint64(kb) > 0:
+		return fmt.Sprintf("%.5g KiB", kb)
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }

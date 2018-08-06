@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -12,14 +13,35 @@ const (
 	PopulateCycleDuration = 10 * time.Millisecond
 )
 
+type CellInfo struct {
+	library       *Library
+	media         *Media
+	playlistIndex int
+}
+
+func NewCellInfo(library *Library, media *Media) *CellInfo {
+	return &CellInfo{
+		library:       library,
+		media:         media,
+		playlistIndex: PlaylistIndexInvalid,
+	}
+}
+
+func (ref *CellInfo) String() string {
+	return fmt.Sprintf("%s: %s", ref.library, ref.media)
+}
+
 type MediaView struct {
 	*tview.Table
-	sync.Mutex
+	sync.Mutex // coordinates visual updates
 	ui         interface{}
 	obscura    *tview.Flex
 	proportion int
+	absolute   int
+	isAbsolute bool
 	isVisible  bool
 	focusRune  rune
+	mediaIndex []*CellInfo
 }
 
 func NewMediaView(container *tview.Flex) *MediaView {
@@ -30,16 +52,21 @@ func NewMediaView(container *tview.Flex) *MediaView {
 		ui:         nil,
 		obscura:    container,
 		proportion: 3,
+		absolute:   0,
+		isAbsolute: false,
 		isVisible:  true,
 		focusRune:  MediaFocusRune,
+		mediaIndex: []*CellInfo{},
 	}
 	container.SetTitle(" Media (m) ")
 	container.SetBorder(true)
 	mediaView.SetTitle("")
 	mediaView.SetBorder(false)
-	mediaView.SetBorderColor(tcell.ColorDarkGray)
+	mediaView.SetBorderColor(tcell.ColorDarkSlateGray)
 	mediaView.SetBorders(false)
 	mediaView.SetSelectable(true /*rows*/, false /*cols*/)
+
+	mediaView.SetSelectionChangedFunc(mediaView.mediaViewSelectionChanged)
 
 	return mediaView
 }
@@ -52,6 +79,8 @@ func (view *MediaView) UI() *UI              { return view.ui.(*UI) }
 func (view *MediaView) FocusRune() rune      { return view.focusRune }
 func (view *MediaView) Obscura() *tview.Flex { return view.obscura }
 func (view *MediaView) Proportion() int      { return view.proportion }
+func (view *MediaView) Absolute() int        { return view.absolute }
+func (view *MediaView) IsAbsolute() bool     { return view.isAbsolute }
 func (view *MediaView) Visible() bool        { return view.isVisible }
 func (view *MediaView) Resizable() bool      { return false }
 
@@ -61,7 +90,7 @@ func (view *MediaView) SetVisible(visible bool) {
 	obs := view.Obscura()
 	if nil != obs {
 		if view.isVisible {
-			obs.ResizeItem(view, 0, view.Proportion())
+			obs.ResizeItem(view, view.Absolute(), view.Proportion())
 		} else {
 			obs.ResizeItem(view, 2, 0)
 			// if the media table is collapsing, fill remaining space with
@@ -123,28 +152,34 @@ func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(
 //  (pimm) MediaView
 // -----------------------------------------------------------------------------
 
-func (view *MediaView) appendMedia(media *Media) {
+func (view *MediaView) appendMedia(library *Library, media *Media) int {
 
 	nameCell := tview.NewTableCell(media.Name())
-	libCell := tview.NewTableCell(media.library.Name())
-	dateCell := tview.NewTableCell(media.MTimeStr())
+	nameCell.SetExpansion(1)
 
+	// multiple library scanners may be trying to add content to the table at
+	// the same time. a mutex will ensure no table position conflicts
 	view.Lock()
 	row := view.GetRowCount()
 	view.SetCell(row, 0, nameCell)
-	view.SetCell(row, 1, libCell)
-	view.SetCell(row, 2, dateCell)
+	view.mediaIndex = append(view.mediaIndex, NewCellInfo(library, media))
 	view.Unlock()
-	//view.UI().app.Draw()
+
+	return row
 }
 
-func (view *MediaView) AddMedia(media *Media) {
+func (view *MediaView) AddMedia(library *Library, media *Media) {
 
-	//view.SetCell(view.numRows, 0, nameCell)
-	//view.SetCell(view.numRows, 1, libCell)
-	//view.SetCell(view.numRows, 2, dateCell)
-	//view.cellChan <- &CellPosition{view.numRows, 0, nameCell}
-	//view.cellChan <- &CellPosition{view.numRows, 1, dateCell}
+	row := view.appendMedia(library, media)
 
-	view.appendMedia(media)
+	if nil == view.UI().mediaDetailView.media {
+		view.mediaViewSelectionChanged(row, -1)
+	}
+}
+
+func (view *MediaView) mediaViewSelectionChanged(row, column int) {
+
+	info := view.mediaIndex[row]
+
+	view.UI().mediaDetailView.SetMedia(info.media)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path"
 
@@ -9,18 +10,23 @@ import (
 )
 
 type NodeInfo struct {
-	parent *tview.TreeNode
-	path   string
+	library *Library
+	parent  *tview.TreeNode
+	path    string
+	include bool
 }
 
 type LibraryView struct {
 	*tview.TreeView
-	ui         interface{}
-	obscura    *tview.Flex
-	proportion int
-	isVisible  bool
-	focusRune  rune
-	dirIndex   map[*Library]map[string]*tview.TreeNode
+	ui           interface{}
+	obscura      *tview.Flex
+	proportion   int
+	absolute     int
+	isAbsolute   bool
+	isVisible    bool
+	focusRune    rune
+	selectedNode *tview.TreeNode
+	dirIndex     map[*Library]map[string]*tview.TreeNode
 }
 
 func NewLibraryView(container *tview.Flex) *LibraryView {
@@ -30,6 +36,8 @@ func NewLibraryView(container *tview.Flex) *LibraryView {
 		ui:         nil,
 		obscura:    container,
 		proportion: 1,
+		absolute:   0,
+		isAbsolute: false,
 		isVisible:  true,
 		focusRune:  LibraryFocusRune,
 		dirIndex:   make(map[*Library]map[string]*tview.TreeNode),
@@ -38,8 +46,8 @@ func NewLibraryView(container *tview.Flex) *LibraryView {
 	libraryView.SetBorder(true)
 	libraryView.SetGraphics(true)
 	libraryView.SetTopLevel(0)
-	libraryView.SetSelectedFunc(nodeSelected)
-	libraryView.SetChangedFunc(nil)
+	libraryView.SetSelectedFunc(libraryView.nodeSelected)
+	libraryView.SetChangedFunc(libraryView.nodeChanged)
 
 	host, err := os.Hostname()
 	if err != nil {
@@ -62,23 +70,14 @@ func (view *LibraryView) UI() *UI              { return view.ui.(*UI) }
 func (view *LibraryView) FocusRune() rune      { return view.focusRune }
 func (view *LibraryView) Obscura() *tview.Flex { return view.obscura }
 func (view *LibraryView) Proportion() int      { return view.proportion }
+func (view *LibraryView) Absolute() int        { return view.absolute }
+func (view *LibraryView) IsAbsolute() bool     { return view.isAbsolute }
 func (view *LibraryView) Visible() bool        { return view.isVisible }
 func (view *LibraryView) Resizable() bool      { return false }
 
 func (view *LibraryView) SetVisible(visible bool) {
 
-	view.isVisible = visible
-	obs := view.Obscura()
-	if nil != obs {
-		if visible {
-			obs.ResizeItem(view, 0, view.Proportion())
-		} else {
-			obs.ResizeItem(view, 2, 0)
-			//if view.ui.pageControl.focusedView == view {
-			//	view.LockFocus(false)
-			//}
-		}
-	}
+	return
 }
 
 func (view *LibraryView) LockFocus(lock bool) {
@@ -134,12 +133,9 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 				switch event.Key() {
 				case tcell.KeyLeft:
 					for n := currNode; nil != n; {
-						n.Collapse()
+						view.expandNode(n, false)
 						n = n.GetReference().(*NodeInfo).parent
 					}
-					inputHandled = true
-				case tcell.KeyRight:
-					currNode.ExpandAll()
 					inputHandled = true
 				}
 
@@ -147,17 +143,26 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 
 				switch event.Key() {
 				case tcell.KeyLeft:
-					children := currNode.GetChildren()
-					isExpanded := currNode.IsExpanded() && len(children) > 0
-					if nil != currInfo.parent && !isExpanded {
+					view.expandNode(currNode, false)
+					if nil != currInfo.parent {
 						view.SetCurrentNode(currInfo.parent)
-						currInfo.parent.Collapse()
-					} else {
-						currNode.Collapse()
+						view.nodeChanged(currInfo.parent)
+						inputHandled = true
 					}
-					inputHandled = true
 				case tcell.KeyRight:
-					currNode.Expand()
+					view.expandNode(currNode, true)
+					// be sure to continue on with TreeView's input handler
+					inputHandled = false
+
+				case tcell.KeyRune:
+					switch event.Rune() {
+					case '[':
+						view.includeNode(currNode, true)
+						inputHandled = true
+					case ']':
+						view.includeNode(currNode, false)
+						inputHandled = true
+					}
 				}
 			}
 
@@ -171,23 +176,81 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 //  (pimm) LibraryView
 // -----------------------------------------------------------------------------
 
-func nodeSelected(node *tview.TreeNode) {
+func (view *LibraryView) updateNodeAppearance(node *tview.TreeNode, isSelected bool) {
 
-	node.SetExpanded(!node.IsExpanded())
+	info := node.GetReference().(*NodeInfo)
+	name := path.Base(info.path)
+
+	isColor := true
+	isUnicode := view.UI().options.UTF8.bool
+	isExpanded := node.IsExpanded()
+	isIncluded := info.include
+
+	pfix := treeNodePrefixExpanded[isExpanded][isUnicode][isColor]
+	incl := treeNodePrefixIncluded[isIncluded][isUnicode][isColor]
+
+	if isSelected {
+		incl = "[black:white]"
+	}
+
+	node.SetText(fmt.Sprintf("%s%s%s", pfix, incl, name))
+}
+
+func (view *LibraryView) expandNode(node *tview.TreeNode, expand bool) {
+
+	isSelectedNode := node == view.selectedNode
+
+	node.SetExpanded(expand)
+
+	view.updateNodeAppearance(node, isSelectedNode)
+}
+
+func (view *LibraryView) includeNode(node *tview.TreeNode, include bool) {
+
+	isSelectedNode := node == view.selectedNode
+
+	info := node.GetReference().(*NodeInfo)
+	info.include = include
+
+	view.updateNodeAppearance(node, isSelectedNode)
+}
+
+func (view *LibraryView) nodeSelected(node *tview.TreeNode) {
+
+	// on selection, simply toggle the node's expansion state
+	view.expandNode(node, !node.IsExpanded())
+}
+
+func (view *LibraryView) nodeChanged(node *tview.TreeNode) {
+
+	if nil != view.selectedNode {
+		view.updateNodeAppearance(view.selectedNode, false)
+	}
+	view.selectedNode = node
+	view.updateNodeAppearance(node, true)
 }
 
 func (view *LibraryView) AddLibrary(library *Library) {
 
 	node := tview.NewTreeNode(library.Name())
 	node.SetSelectable(true)
-	node.Collapse()
-	node.SetReference(&NodeInfo{nil, library.Path()})
+	node.SetReference(&NodeInfo{library, nil, library.Path(), true})
 
 	root := view.GetRoot()
 	root.AddChild(node)
 
+	if 1 == len(root.GetChildren()) {
+		view.nodeChanged(node)
+	}
+
+	//infoLog.Logf("sel = %#v", view.selectedNode)
+	//infoLog.Logf("sel = %#v", root)
+	//infoLog.Logf("sel = %#v", node)
+
 	view.dirIndex[library] = make(map[string]*tview.TreeNode)
 	view.dirIndex[library][library.Path()] = node
+
+	view.expandNode(node, false)
 }
 
 func (view *LibraryView) AddLibraryDirectory(library *Library, dir string) {
@@ -197,8 +260,9 @@ func (view *LibraryView) AddLibraryDirectory(library *Library, dir string) {
 	node := tview.NewTreeNode(path.Base(dir))
 
 	parent.AddChild(node)
-	node.Collapse()
-	node.SetReference(&NodeInfo{parent, dir})
+	node.SetReference(&NodeInfo{library, parent, dir, true})
 
 	libIndex[dir] = node
+
+	view.expandNode(node, false)
 }

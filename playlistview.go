@@ -10,6 +10,8 @@ type PlaylistView struct {
 	ui         interface{}
 	obscura    *tview.Flex
 	proportion int
+	absolute   int
+	isAbsolute bool
 	isVisible  bool
 	focusRune  rune
 }
@@ -21,6 +23,8 @@ func NewPlaylistView(container *tview.Flex) *PlaylistView {
 		ui:         nil,
 		obscura:    container,
 		proportion: 1,
+		absolute:   0,
+		isAbsolute: false,
 		isVisible:  true,
 		focusRune:  PlaylistFocusRune,
 	}
@@ -39,6 +43,8 @@ func (view *PlaylistView) UI() *UI              { return view.ui.(*UI) }
 func (view *PlaylistView) FocusRune() rune      { return view.focusRune }
 func (view *PlaylistView) Obscura() *tview.Flex { return view.obscura }
 func (view *PlaylistView) Proportion() int      { return view.proportion }
+func (view *PlaylistView) Absolute() int        { return view.absolute }
+func (view *PlaylistView) IsAbsolute() bool     { return view.isAbsolute }
 func (view *PlaylistView) Visible() bool        { return view.isVisible }
 func (view *PlaylistView) Resizable() bool      { return true }
 
@@ -48,7 +54,7 @@ func (view *PlaylistView) SetVisible(visible bool) {
 	obs := view.Obscura()
 	if nil != obs {
 		if view.isVisible {
-			obs.ResizeItem(view, 0, view.Proportion())
+			obs.ResizeItem(view, view.Absolute(), view.Proportion())
 		} else {
 			obs.ResizeItem(view, 2, 0)
 			if view.UI().pageControl.focusedView == view {
