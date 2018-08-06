@@ -46,6 +46,7 @@ type UI struct {
 
 	focusLocked      bool
 	focusLockedView  UIView
+	focusLockedColor tcell.Color
 	focusTitleColor  map[bool]tcell.Color
 	focusBorderColor map[bool]tcell.Color
 
@@ -145,8 +146,9 @@ func NewUI(opt *Options) *UI {
 
 		sigDraw: sigDraw,
 
-		focusLocked:     false,
-		focusLockedView: nil,
+		focusLocked:      false,
+		focusLockedView:  nil,
+		focusLockedColor: tcell.ColorOrangeRed,
 		focusTitleColor: map[bool]tcell.Color{
 			false: tcell.ColorBlanchedAlmond,
 			true:  tcell.ColorOrange,
@@ -166,14 +168,6 @@ func NewUI(opt *Options) *UI {
 	}
 
 	//
-	// initially focused view
-	//
-	self.SetRoot(pageControl, true)
-	self.SetFocus(mediaView)
-	mediaView.obscura.SetTitleColor(ui.focusTitleColor[true])
-	mediaView.obscura.SetBorderColor(ui.focusBorderColor[true])
-
-	//
 	// backreference so each view has easy access to every other
 	//
 	ui.libraryView.ui = ui
@@ -182,6 +176,23 @@ func NewUI(opt *Options) *UI {
 	ui.playlistView.ui = ui
 	ui.logView.ui = ui
 	ui.helpView.ui = ui
+
+	//
+	// initially focused view
+	//
+	self.SetRoot(pageControl, true)
+	self.SetFocus(mediaView)
+	mediaView.obscura.SetTitleColor(ui.focusTitleColor[true])
+	mediaView.obscura.SetBorderColor(ui.focusBorderColor[true])
+
+	//
+	// all other views initially unfocused
+	//
+	libraryView.Blur()
+	mediaDetailView.Blur()
+	playlistView.Blur()
+	logView.Blur()
+	helpView.Blur()
 
 	ui.helpView.SetVisible(false)
 
@@ -229,14 +240,11 @@ type ModalView struct {
 }
 
 func isHelpEventKeyRune(keyRune rune) bool { return HelpRune == keyRune }
-
 func isQuitEventKeyRune(keyRune rune) bool { return QuitRune == keyRune }
 func (ui *UI) ConfirmQuitPrompt() {
 
 	modalView := &ModalView{Modal: tview.NewModal()}
 	modalView.SetText("Are you a quitter?")
-	modalView.Modal.SetBackgroundColor(tcell.ColorDeepSkyBlue)
-	modalView.Modal.SetBorderColor(tcell.ColorGreen)
 	modalView.AddButtons([]string{"Yes!", " No "})
 	modalView.SetDoneFunc(
 		func(buttonIndex int, buttonLabel string) {
@@ -266,7 +274,6 @@ func (ui *UI) GlobalInputHandled(
 
 	case tcell.ModShift:
 	case tcell.ModCtrl:
-
 		switch inKey {
 
 		case tcell.KeyCtrlC:
@@ -283,7 +290,6 @@ func (ui *UI) GlobalInputHandled(
 
 	case tcell.ModMeta:
 	case tcell.ModNone:
-
 		switch inKey {
 
 		case tcell.KeyEscape:
@@ -293,21 +299,23 @@ func (ui *UI) GlobalInputHandled(
 			}
 
 		case tcell.KeyRune:
+			if !ui.focusLocked {
+				switch {
+				case isQuitEventKeyRune(inRune):
+					ui.ConfirmQuitPrompt()
+					return true
 
-			switch {
-			case isQuitEventKeyRune(inRune):
-				ui.ConfirmQuitPrompt()
-				return true
-
-			case primOK && isHelpEventKeyRune(inRune):
-				focusView.SetVisible(!focusView.Visible())
-				return true
-
-			case primOK && !ui.focusLocked:
-				ui.pageControl.focusedView = focusPrim
-				setFocus(focusPrim)
-				focusView.SetVisible(true)
-				return true
+				case primOK:
+					if isHelpEventKeyRune(inRune) {
+						focusView.SetVisible(!focusView.Visible())
+						return true
+					} else {
+						ui.pageControl.focusedView = focusPrim
+						setFocus(focusPrim)
+						focusView.SetVisible(true)
+						return true
+					}
+				}
 			}
 
 		default:

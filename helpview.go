@@ -74,7 +74,7 @@ func (view *HelpView) LockFocus(lock bool) {
 	view.UI().focusLocked = lock
 	view.UI().focusLockedView = view
 	if lock {
-		view.SetBorderColor(tcell.ColorDodgerBlue)
+		view.SetBorderColor(view.UI().focusLockedColor)
 	} else {
 		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
 	}
@@ -86,19 +86,11 @@ func (view *HelpView) LockFocus(lock bool) {
 
 func (view *HelpView) Focus(delegate func(p tview.Primitive)) {
 
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[true])
-		view.SetBorderColor(view.UI().focusBorderColor[true])
-	}
 	view.Grid.Focus(delegate)
 }
 
 func (view *HelpView) Blur() {
 
-	if nil != view.ui {
-		view.SetTitleColor(view.UI().focusTitleColor[false])
-		view.SetBorderColor(view.UI().focusBorderColor[false])
-	}
 	view.Grid.Blur()
 }
 

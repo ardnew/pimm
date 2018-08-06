@@ -13,10 +13,32 @@ const (
 	MDSubtitles
 	MDType
 	MDCommand
+	MDCOUNT
 )
 
 type DetailFormItem struct {
-	tview.InputField
+	*tview.InputField
+	item   int
+	parent *MediaDetailView
+}
+
+func NewDetailFormItem(parent *MediaDetailView, item int, name string) *DetailFormItem {
+
+	field := tview.NewInputField()
+	field.SetLabel(name)
+
+	field.SetAcceptanceFunc(func(text string, lastChar rune) bool { return false })
+	field.SetChangedFunc(nil)
+	field.SetDoneFunc(nil)
+	field.SetFinishedFunc(nil)
+
+	detail := &DetailFormItem{
+		InputField: field,
+		item:       item,
+		parent:     parent,
+	}
+
+	return detail
 }
 
 type MediaDetailView struct {
@@ -29,6 +51,7 @@ type MediaDetailView struct {
 	isVisible  bool
 	focusRune  rune
 	media      *Media
+	detail     [MDCOUNT]*DetailFormItem
 }
 
 func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
@@ -42,6 +65,7 @@ func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
 		isAbsolute: true,
 		isVisible:  true,
 		focusRune:  MediaDetailFocusRune,
+		detail:     [MDCOUNT]*DetailFormItem{},
 	}
 	mediaDetailView.SetTitle(" Info (i) ")
 	mediaDetailView.SetBorder(true)
@@ -51,6 +75,18 @@ func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
 	mediaDetailView.SetFieldBackgroundColor(tcell.ColorDarkSlateGray)
 	mediaDetailView.SetFieldTextColor(tcell.ColorWhite)
 	mediaDetailView.SetLabelColor(tcell.ColorBlue)
+
+	mediaDetailView.detail[MDName] = NewDetailFormItem(mediaDetailView, MDName, "Name")
+	mediaDetailView.detail[MDSize] = NewDetailFormItem(mediaDetailView, MDSize, "Size")
+	mediaDetailView.detail[MDModTime] = NewDetailFormItem(mediaDetailView, MDModTime, "ModTime")
+	mediaDetailView.detail[MDLibrary] = NewDetailFormItem(mediaDetailView, MDLibrary, "Library")
+	mediaDetailView.detail[MDSubtitles] = NewDetailFormItem(mediaDetailView, MDSubtitles, "Subtitles")
+	mediaDetailView.detail[MDType] = NewDetailFormItem(mediaDetailView, MDType, "Type")
+	mediaDetailView.detail[MDCommand] = NewDetailFormItem(mediaDetailView, MDCommand, "Command")
+
+	for _, d := range mediaDetailView.detail {
+		mediaDetailView.AddFormItem(d)
+	}
 
 	return mediaDetailView
 }
@@ -89,7 +125,7 @@ func (view *MediaDetailView) LockFocus(lock bool) {
 	view.UI().focusLocked = lock
 	view.UI().focusLockedView = view
 	if lock {
-		view.SetBorderColor(tcell.ColorDodgerBlue)
+		view.SetBorderColor(view.UI().focusLockedColor)
 	} else {
 		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
 	}
@@ -121,13 +157,76 @@ func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus
 
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
-			infoLog.Log("+unhandled")
 			if view.UI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
 			view.Form.InputHandler()(event, setFocus)
 		})
 }
+
+// -----------------------------------------------------------------------------
+//  (tview) embedded Primitive.(InputField)
+// -----------------------------------------------------------------------------
+
+func (view *DetailFormItem) Focus(delegate func(p tview.Primitive)) {
+
+	locked := view.parent.UI().focusLockedView
+
+	if nil != view.parent && locked != view.parent {
+		view.parent.SetTitleColor(view.parent.UI().focusTitleColor[true])
+		view.parent.SetBorderColor(view.parent.UI().focusBorderColor[true])
+	}
+	view.InputField.Focus(delegate)
+}
+
+func (view *DetailFormItem) Blur() {
+
+	//locked := view.parent.UI().focusLockedView
+
+	if nil != view.parent {
+		view.parent.SetTitleColor(view.parent.UI().focusTitleColor[false])
+		view.parent.SetBorderColor(view.parent.UI().focusBorderColor[false])
+	}
+	view.InputField.Blur()
+}
+
+func (view *DetailFormItem) InputHandler() func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+
+	isTableNavKey := func(event *tcell.EventKey) bool {
+		switch event.Key() {
+		case tcell.KeyUp, tcell.KeyDown, tcell.KeyPgUp, tcell.KeyPgDn:
+			return true
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'h', 'l', 'j', 'k', 'g', 'G':
+				return true
+			}
+		}
+		return false
+	}
+
+	return view.parent.WrapInputHandler(
+		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			if view.parent.UI().GlobalInputHandled(view.parent, event, setFocus) {
+				return
+			}
+			if isTableNavKey(event) && !view.parent.UI().focusLocked {
+				// never forward the keystrokes anywhere if we have a focus lock
+				view.parent.UI().mediaView.InputHandler()(event, setFocus)
+				return
+			}
+			switch event.Key() {
+			case tcell.KeyEnter, tcell.KeyEscape:
+				return
+			default:
+				view.InputField.InputHandler()(event, setFocus)
+			}
+		})
+}
+
+// -----------------------------------------------------------------------------
+//  (pimm) DetailFormItem
+// -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
 //  (pimm) MediaDetailView
@@ -137,27 +236,11 @@ func (view *MediaDetailView) SetMedia(media *Media) {
 
 	view.media = media
 
-	view.Clear(true)
-
-	view.Form.AddInputField("Name", media.Name(), 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	view.Form.AddInputField("Size", media.SizeStr(), 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	view.Form.AddInputField("ModTime", media.MTimeStr(), 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	view.Form.AddInputField("Library", media.library.Name(), 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	view.Form.AddInputField("Subtitles", "(sub)", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	view.Form.AddInputField("Type", "(ext)", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
-	view.Form.AddInputField("Command", "(cmd)", 0,
-		func(text string, last rune) bool { return false },
-		func(text string) {})
+	view.detail[MDName].SetText(media.Name())
+	view.detail[MDSize].SetText(media.SizeStr())
+	view.detail[MDModTime].SetText(media.MTimeStr())
+	view.detail[MDLibrary].SetText(media.library.Name())
+	view.detail[MDSubtitles].SetText("(sub)")
+	view.detail[MDType].SetText("(ext)")
+	view.detail[MDCommand].SetText("(cmd)")
 }

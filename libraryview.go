@@ -76,7 +76,6 @@ func (view *LibraryView) Visible() bool        { return view.isVisible }
 func (view *LibraryView) Resizable() bool      { return false }
 
 func (view *LibraryView) SetVisible(visible bool) {
-
 	return
 }
 
@@ -85,7 +84,7 @@ func (view *LibraryView) LockFocus(lock bool) {
 	view.UI().focusLocked = lock
 	view.UI().focusLockedView = view
 	if lock {
-		view.SetBorderColor(tcell.ColorDodgerBlue)
+		view.SetBorderColor(view.UI().focusLockedColor)
 	} else {
 		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
 	}

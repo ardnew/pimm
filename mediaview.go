@@ -85,22 +85,7 @@ func (view *MediaView) Visible() bool        { return view.isVisible }
 func (view *MediaView) Resizable() bool      { return false }
 
 func (view *MediaView) SetVisible(visible bool) {
-
-	view.isVisible = visible
-	obs := view.Obscura()
-	if nil != obs {
-		if view.isVisible {
-			obs.ResizeItem(view, view.Absolute(), view.Proportion())
-		} else {
-			obs.ResizeItem(view, 2, 0)
-			// if the media table is collapsing, fill remaining space with
-			// the media info form
-			view.UI().mediaDetailView.SetVisible(true)
-			if view.UI().pageControl.focusedView == view {
-				view.LockFocus(false)
-			}
-		}
-	}
+	return
 }
 
 func (view *MediaView) LockFocus(lock bool) {
@@ -108,7 +93,7 @@ func (view *MediaView) LockFocus(lock bool) {
 	view.UI().focusLocked = lock
 	view.UI().focusLockedView = view
 	if lock {
-		view.Obscura().SetBorderColor(tcell.ColorDodgerBlue)
+		view.Obscura().SetBorderColor(view.UI().focusLockedColor)
 	} else {
 		view.Obscura().SetBorderColor(
 			view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])

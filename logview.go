@@ -73,7 +73,7 @@ func (view *LogView) LockFocus(lock bool) {
 	view.UI().focusLocked = lock
 	view.UI().focusLockedView = view
 	if lock {
-		view.SetBorderColor(tcell.ColorDodgerBlue)
+		view.SetBorderColor(view.UI().focusLockedColor)
 	} else {
 		view.SetBorderColor(view.UI().focusBorderColor[view.UI().pageControl.focusedView == view])
 	}
