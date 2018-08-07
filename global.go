@@ -29,6 +29,7 @@ var (
 	EFileIgnore     = &ExitCode{7, "user-ignored file"}
 	EInvalidOption  = &ExitCode{8, "invalid user option"}
 	EFileHash       = &ExitCode{9, "failed to calculate hash"}
+	ELibraryBusy    = &ExitCode{10, "library busy"}
 	EUsage          = &ExitCode{99, "usage"}
 	EUnknown        = &ExitCode{255, "unknown error"}
 )
@@ -236,23 +237,30 @@ func (l *ConsoleLog) Die(c *ErrorCode) {
 	os.Exit(c.Code)
 }
 
-func SizeStr(bytes int64) string {
+func SizeStr(bytes int64, showBytes bool) string {
 
 	kb := float32(bytes) / 1024.0
 	mb := float32(kb) / 1024.0
 	gb := float32(mb) / 1024.0
 	tb := float32(gb) / 1024.0
+	ss := ""
 
 	switch {
 	case uint64(tb) > 0:
-		return fmt.Sprintf("%.5g TiB", tb)
+		ss = fmt.Sprintf("%.3g TiB", tb)
 	case uint64(gb) > 0:
-		return fmt.Sprintf("%.5g GiB", gb)
+		ss = fmt.Sprintf("%.3g GiB", gb)
 	case uint64(mb) > 0:
-		return fmt.Sprintf("%.5g MiB", mb)
+		ss = fmt.Sprintf("%.3g MiB", mb)
 	case uint64(kb) > 0:
-		return fmt.Sprintf("%.5g KiB", kb)
+		ss = fmt.Sprintf("%.3g KiB", kb)
 	default:
-		return fmt.Sprintf("%d B", bytes)
+		ss = fmt.Sprintf("%d B", bytes)
+		showBytes = false
 	}
+
+	if showBytes {
+		ss = fmt.Sprintf("%s (%d B)", ss, bytes)
+	}
+	return ss
 }

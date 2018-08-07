@@ -158,9 +158,10 @@ func populateLibrary(options *Options, library []*Library, ui *UI) {
 			delta := time.Since(start)
 			if nil != err {
 				errLog.Log(err)
+			} else {
+				infoLog.Logf("finished scan: %q (%s) %d files, %s",
+					lib.Name(), delta.Round(time.Millisecond), lib.TotalMedia(), SizeStr(lib.TotalSize(), false))
 			}
-			infoLog.Logf("finished scan: %q (%s)",
-				lib.Name(), delta.Round(time.Millisecond))
 		}(lib)
 	}
 }

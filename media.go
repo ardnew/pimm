@@ -56,15 +56,6 @@ func (m *Media) String() string {
 	return fmt.Sprintf("%q{%s}#%x", m.name, m.path, m.hash)
 }
 
-func (m *Media) Columns() []string {
-	return []string{
-		m.name,
-		m.MTimeStr(),
-		m.SizeStr(),
-		m.HashStr(),
-	}
-}
-
 func (m *Media) Dir() string {
 	return m.dir
 }
@@ -81,9 +72,8 @@ func (m *Media) Size() int64 {
 	return m.size
 }
 
-func (m *Media) SizeStr() string {
-	//return fmt.Sprintf("%d", m.size)
-	return SizeStr(m.size)
+func (m *Media) SizeStr(showBytes bool) string {
+	return SizeStr(m.size, showBytes)
 }
 
 func (m *Media) MTime() time.Time {

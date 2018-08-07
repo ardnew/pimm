@@ -16,6 +16,7 @@ const (
 	PageIDBrowser   = "browse"
 	PageIDQuitModal = "quit"
 
+	// Navigation (Global)
 	LibraryFocusRune     = 'l'
 	MediaFocusRune       = 'm'
 	MediaDetailFocusRune = 'i'
@@ -23,6 +24,11 @@ const (
 	LogFocusRune         = 'v'
 	HelpRune             = 'h'
 	QuitRune             = 'q'
+
+	// Library
+	IncludeNodeRune = '['
+	ExcludeNodeRune = ']'
+	RecurseTreeMod  = tcell.ModAlt
 )
 
 type UIView interface {
@@ -199,6 +205,10 @@ func NewUI(opt *Options) *UI {
 	go ui.DrawCycle()
 
 	return ui
+}
+
+func (ui *UI) SigDraw() chan interface{} {
+	return ui.sigDraw
 }
 
 func (ui *UI) DrawCycle() {

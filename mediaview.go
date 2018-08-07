@@ -14,15 +14,19 @@ const (
 )
 
 type CellInfo struct {
+	cell          *tview.TableCell
 	library       *Library
 	media         *Media
+	libPath       string
 	playlistIndex int
 }
 
-func NewCellInfo(library *Library, media *Media) *CellInfo {
+func NewCellInfo(cell *tview.TableCell, library *Library, media *Media) *CellInfo {
 	return &CellInfo{
+		cell:          cell,
 		library:       library,
 		media:         media,
+		libPath:       fmt.Sprintf("%s//%s", library.Path(), media.Dir()),
 		playlistIndex: PlaylistIndexInvalid,
 	}
 }
@@ -41,7 +45,8 @@ type MediaView struct {
 	isAbsolute bool
 	isVisible  bool
 	focusRune  rune
-	mediaIndex []*CellInfo
+	mediaIndex []*CellInfo // table of all media
+	tableIndex []int       // xref for current/unfiltered media
 }
 
 func NewMediaView(container *tview.Flex) *MediaView {
@@ -57,6 +62,7 @@ func NewMediaView(container *tview.Flex) *MediaView {
 		isVisible:  true,
 		focusRune:  MediaFocusRune,
 		mediaIndex: []*CellInfo{},
+		tableIndex: []int{},
 	}
 	container.SetTitle(" Media (m) ")
 	container.SetBorder(true)
@@ -126,6 +132,7 @@ func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(
 
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			//infoLog.Logf("table input: %v", event)
 			if view.UI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
@@ -139,15 +146,16 @@ func (view *MediaView) InputHandler() func(event *tcell.EventKey, setFocus func(
 
 func (view *MediaView) appendMedia(library *Library, media *Media) int {
 
-	nameCell := tview.NewTableCell(media.Name())
-	nameCell.SetExpansion(1)
+	cell := tview.NewTableCell(media.Name())
+	cell.SetExpansion(1)
 
 	// multiple library scanners may be trying to add content to the table at
 	// the same time. a mutex will ensure no table position conflicts
 	view.Lock()
 	row := view.GetRowCount()
-	view.SetCell(row, 0, nameCell)
-	view.mediaIndex = append(view.mediaIndex, NewCellInfo(library, media))
+	view.SetCell(row, 0, cell)
+	view.mediaIndex = append(view.mediaIndex, NewCellInfo(cell, library, media))
+	view.tableIndex = append(view.tableIndex, row)
 	view.Unlock()
 
 	return row
@@ -162,9 +170,26 @@ func (view *MediaView) AddMedia(library *Library, media *Media) {
 	}
 }
 
+func (view *MediaView) applyExcludeFilter(exclude map[string]byte) {
+
+	view.tableIndex = []int{}
+	view.Clear()
+
+	count := 0
+	for i, info := range view.mediaIndex {
+		libPath := fmt.Sprintf("%s//%s", info.library.Path(), info.media.Dir())
+		if _, excluded := exclude[libPath]; !excluded {
+			view.tableIndex = append(view.tableIndex, i)
+			view.SetCell(count, 0, info.cell)
+			count++
+			view.UI().SigDraw() <- view
+		}
+	}
+}
+
 func (view *MediaView) mediaViewSelectionChanged(row, column int) {
 
-	info := view.mediaIndex[row]
+	info := view.mediaIndex[view.tableIndex[row]]
 
 	view.UI().mediaDetailView.SetMedia(info.media)
 }

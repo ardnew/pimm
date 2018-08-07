@@ -14,8 +14,11 @@ type Library struct {
 	depthLimit uint                // recursive traversal depth
 	ignored    []string            // patterns of ignored directories
 	media      map[string][]*Media // map of each subdirectory to slice of its files
+	totalMedia int64               // number of media files discovered
+	totalSize  int64               // total size of all media files discovered
 	sigDir     chan string         // subdirectory discovery
 	sigMedia   chan *Media         // media discovery
+	sigWork    chan bool           // coordinates updates
 }
 
 const (
@@ -53,8 +56,11 @@ func NewLibrary(libName string, ignore []string) (*Library, *ErrorCode) {
 		depthLimit: LibraryDepthUnlimited,
 		ignored:    ignore,
 		media:      make(map[string][]*Media),
+		totalMedia: 0,
+		totalSize:  0,
 		sigDir:     make(chan string),
 		sigMedia:   make(chan *Media),
+		sigWork:    make(chan bool, 1),
 	}, nil
 }
 
@@ -111,12 +117,24 @@ func (l *Library) Media() map[string][]*Media {
 	return l.media
 }
 
+func (l *Library) TotalMedia() int64 {
+	return l.totalMedia
+}
+
+func (l *Library) TotalSize() int64 {
+	return l.totalSize
+}
+
 func (l *Library) SigDir() chan string {
 	return l.sigDir
 }
 
 func (l *Library) SigMedia() chan *Media {
 	return l.sigMedia
+}
+
+func (l *Library) SigWork() chan bool {
+	return l.sigWork
 }
 
 func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
@@ -182,6 +200,8 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 	if nil != errCode {
 		return errCode
 	}
+	l.totalMedia++
+	l.totalSize += media.Size()
 
 	l.media[currDir] = append(l.media[currDir], media)
 	l.sigMedia <- media
@@ -191,13 +211,14 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 
 func (l *Library) Scan() *ErrorCode {
 
-	err := l.Walk(l.path, 1)
-	if nil != err {
-		switch err.Code {
-		default:
-			infoLog.Log("walk(%q): %s", l.path, err)
-		}
-		return err
+	var err *ErrorCode = nil
+
+	select {
+	case l.sigWork <- true:
+		err = l.Walk(l.path, 1)
+		<-l.sigWork
+	default:
+		err = NewErrorCode(ELibraryBusy, fmt.Sprintf("cannot scan library %q", l.path))
 	}
-	return nil
+	return err
 }

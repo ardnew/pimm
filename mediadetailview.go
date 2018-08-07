@@ -6,10 +6,10 @@ import (
 )
 
 const (
-	MDName int = iota
+	MDLibrary int = iota
+	MDName
 	MDSize
 	MDModTime
-	MDLibrary
 	MDSubtitles
 	MDType
 	MDCommand
@@ -18,8 +18,9 @@ const (
 
 type DetailFormItem struct {
 	*tview.InputField
-	item   int
-	parent *MediaDetailView
+	item     int
+	parent   *MediaDetailView
+	inputMap map[tcell.Key]tcell.Key
 }
 
 func NewDetailFormItem(parent *MediaDetailView, item int, name string) *DetailFormItem {
@@ -36,6 +37,10 @@ func NewDetailFormItem(parent *MediaDetailView, item int, name string) *DetailFo
 		InputField: field,
 		item:       item,
 		parent:     parent,
+		inputMap: map[tcell.Key]tcell.Key{
+			tcell.KeyDown: tcell.KeyTab,
+			tcell.KeyUp:   tcell.KeyBacktab,
+		},
 	}
 
 	return detail
@@ -74,17 +79,18 @@ func NewMediaDetailView(container *tview.Flex) *MediaDetailView {
 
 	mediaDetailView.SetFieldBackgroundColor(tcell.ColorDarkSlateGray)
 	mediaDetailView.SetFieldTextColor(tcell.ColorWhite)
-	mediaDetailView.SetLabelColor(tcell.ColorBlue)
+	mediaDetailView.SetLabelColor(tcell.ColorBlanchedAlmond)
 
+	mediaDetailView.detail[MDLibrary] = NewDetailFormItem(mediaDetailView, MDLibrary, "Library")
 	mediaDetailView.detail[MDName] = NewDetailFormItem(mediaDetailView, MDName, "Name")
 	mediaDetailView.detail[MDSize] = NewDetailFormItem(mediaDetailView, MDSize, "Size")
 	mediaDetailView.detail[MDModTime] = NewDetailFormItem(mediaDetailView, MDModTime, "ModTime")
-	mediaDetailView.detail[MDLibrary] = NewDetailFormItem(mediaDetailView, MDLibrary, "Library")
 	mediaDetailView.detail[MDSubtitles] = NewDetailFormItem(mediaDetailView, MDSubtitles, "Subtitles")
 	mediaDetailView.detail[MDType] = NewDetailFormItem(mediaDetailView, MDType, "Type")
 	mediaDetailView.detail[MDCommand] = NewDetailFormItem(mediaDetailView, MDCommand, "Command")
 
 	for _, d := range mediaDetailView.detail {
+		d.SetInputCapture(d.inputDelegate)
 		mediaDetailView.AddFormItem(d)
 	}
 
@@ -157,6 +163,7 @@ func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus
 
 	return view.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			// infoLog.Logf("form input: %v", event)
 			if view.UI().GlobalInputHandled(view, event, setFocus) {
 				return
 			}
@@ -170,9 +177,10 @@ func (view *MediaDetailView) InputHandler() func(event *tcell.EventKey, setFocus
 
 func (view *DetailFormItem) Focus(delegate func(p tview.Primitive)) {
 
-	locked := view.parent.UI().focusLockedView
+	detailViewLocked := view.parent.UI().focusLocked &&
+		view.parent == view.parent.UI().focusLockedView
 
-	if nil != view.parent && locked != view.parent {
+	if nil != view.parent && !detailViewLocked {
 		view.parent.SetTitleColor(view.parent.UI().focusTitleColor[true])
 		view.parent.SetBorderColor(view.parent.UI().focusBorderColor[true])
 	}
@@ -181,9 +189,10 @@ func (view *DetailFormItem) Focus(delegate func(p tview.Primitive)) {
 
 func (view *DetailFormItem) Blur() {
 
-	//locked := view.parent.UI().focusLockedView
+	detailViewLocked := view.parent.UI().focusLocked &&
+		view.parent == view.parent.UI().focusLockedView
 
-	if nil != view.parent {
+	if nil != view.parent && !detailViewLocked {
 		view.parent.SetTitleColor(view.parent.UI().focusTitleColor[false])
 		view.parent.SetBorderColor(view.parent.UI().focusBorderColor[false])
 	}
@@ -207,6 +216,7 @@ func (view *DetailFormItem) InputHandler() func(event *tcell.EventKey, setFocus 
 
 	return view.parent.WrapInputHandler(
 		func(event *tcell.EventKey, setFocus func(p tview.Primitive)) {
+			// infoLog.Logf("field input: %v", event)
 			if view.parent.UI().GlobalInputHandled(view.parent, event, setFocus) {
 				return
 			}
@@ -228,6 +238,15 @@ func (view *DetailFormItem) InputHandler() func(event *tcell.EventKey, setFocus 
 //  (pimm) DetailFormItem
 // -----------------------------------------------------------------------------
 
+func (view *DetailFormItem) inputDelegate(event *tcell.EventKey) *tcell.EventKey {
+
+	// infoLog.Logf("field capture: %v", event)
+	if key, ok := view.inputMap[event.Key()]; ok {
+		return tcell.NewEventKey(key, event.Rune(), event.Modifiers())
+	}
+	return event
+}
+
 // -----------------------------------------------------------------------------
 //  (pimm) MediaDetailView
 // -----------------------------------------------------------------------------
@@ -236,10 +255,10 @@ func (view *MediaDetailView) SetMedia(media *Media) {
 
 	view.media = media
 
-	view.detail[MDName].SetText(media.Name())
-	view.detail[MDSize].SetText(media.SizeStr())
-	view.detail[MDModTime].SetText(media.MTimeStr())
 	view.detail[MDLibrary].SetText(media.library.Name())
+	view.detail[MDName].SetText(media.Name())
+	view.detail[MDSize].SetText(media.SizeStr(true))
+	view.detail[MDModTime].SetText(media.MTimeStr())
 	view.detail[MDSubtitles].SetText("(sub)")
 	view.detail[MDType].SetText("(ext)")
 	view.detail[MDCommand].SetText("(cmd)")

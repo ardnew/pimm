@@ -108,7 +108,8 @@ func (view *LogView) InputHandler() func(event *tcell.EventKey, setFocus func(p 
 			handled := false
 			switch event.Key() {
 			case tcell.KeyRune:
-				if ' ' == event.Rune() {
+				switch event.Rune() {
+				case ' ':
 					for n, c := range tcell.ColorNames {
 						v := tcell.ColorValues[c]
 						s := fmt.Sprintf("[#%06x] %24s: %10d 0x%08x [-:-:-]", v, n, v, v)

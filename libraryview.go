@@ -27,6 +27,7 @@ type LibraryView struct {
 	focusRune    rune
 	selectedNode *tview.TreeNode
 	dirIndex     map[*Library]map[string]*tview.TreeNode
+	excludeDir   map[string]byte
 }
 
 func NewLibraryView(container *tview.Flex) *LibraryView {
@@ -41,6 +42,7 @@ func NewLibraryView(container *tview.Flex) *LibraryView {
 		isVisible:  true,
 		focusRune:  LibraryFocusRune,
 		dirIndex:   make(map[*Library]map[string]*tview.TreeNode),
+		excludeDir: nil,
 	}
 	libraryView.SetTitle(" Library (l) ")
 	libraryView.SetBorder(true)
@@ -127,15 +129,20 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 
 			switch mask := event.Modifiers(); mask {
 
-			case tcell.ModAlt:
+			case RecurseTreeMod:
 
 				switch event.Key() {
-				case tcell.KeyLeft:
-					for n := currNode; nil != n; {
-						view.expandNode(n, false)
-						n = n.GetReference().(*NodeInfo).parent
+				case tcell.KeyRune:
+					switch event.Rune() {
+					case IncludeNodeRune:
+						view.includeNodeTree(currNode, true)
+						view.includeFilterChanged()
+						inputHandled = true
+					case ExcludeNodeRune:
+						view.includeNodeTree(currNode, false)
+						view.includeFilterChanged()
+						inputHandled = true
 					}
-					inputHandled = true
 				}
 
 			case tcell.ModNone:
@@ -155,11 +162,13 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 
 				case tcell.KeyRune:
 					switch event.Rune() {
-					case '[':
+					case IncludeNodeRune:
 						view.includeNode(currNode, true)
+						view.includeFilterChanged()
 						inputHandled = true
-					case ']':
+					case ExcludeNodeRune:
 						view.includeNode(currNode, false)
+						view.includeFilterChanged()
 						inputHandled = true
 					}
 				}
@@ -206,12 +215,57 @@ func (view *LibraryView) expandNode(node *tview.TreeNode, expand bool) {
 
 func (view *LibraryView) includeNode(node *tview.TreeNode, include bool) {
 
+	var err *ErrorCode = nil
+
 	isSelectedNode := node == view.selectedNode
 
 	info := node.GetReference().(*NodeInfo)
-	info.include = include
 
-	view.updateNodeAppearance(node, isSelectedNode)
+	select {
+	case info.library.SigWork() <- true:
+		info.library.SigWork()
+		info.include = include
+		<-info.library.SigWork()
+		view.updateNodeAppearance(node, isSelectedNode)
+	default:
+		err = NewErrorCode(ELibraryBusy, "cannot apply filter until library is ready")
+	}
+
+	if nil != err {
+		errLog.Log(err)
+	}
+}
+
+func (view *LibraryView) includeNodeTree(node *tview.TreeNode, include bool) {
+
+	view.includeNode(node, include)
+
+	for _, child := range node.GetChildren() {
+		view.includeNodeTree(child, include)
+	}
+}
+
+func (view *LibraryView) includeFilterChanged() {
+
+	var walk func(*tview.TreeNode, map[string]byte)
+
+	walk = func(node *tview.TreeNode, exclude map[string]byte) {
+		info := node.GetReference().(*NodeInfo)
+		if !info.include {
+			libPath := fmt.Sprintf("%s//%s", info.library.Path(), info.path)
+			exclude[libPath] = 1
+		}
+		for _, child := range node.GetChildren() {
+			walk(child, exclude)
+		}
+	}
+
+	view.excludeDir = map[string]byte{}
+	for _, libNode := range view.GetRoot().GetChildren() {
+		walk(libNode, view.excludeDir)
+	}
+
+	view.UI().mediaView.applyExcludeFilter(view.excludeDir)
 }
 
 func (view *LibraryView) nodeSelected(node *tview.TreeNode) {
@@ -241,10 +295,6 @@ func (view *LibraryView) AddLibrary(library *Library) {
 	if 1 == len(root.GetChildren()) {
 		view.nodeChanged(node)
 	}
-
-	//infoLog.Logf("sel = %#v", view.selectedNode)
-	//infoLog.Logf("sel = %#v", root)
-	//infoLog.Logf("sel = %#v", node)
 
 	view.dirIndex[library] = make(map[string]*tview.TreeNode)
 	view.dirIndex[library][library.Path()] = node
