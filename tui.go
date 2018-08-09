@@ -207,10 +207,7 @@ func NewUI(opt *Options) *UI {
 	return ui
 }
 
-func (ui *UI) SigDraw() chan interface{} {
-	return ui.sigDraw
-}
-
+func (ui *UI) SigDraw() chan interface{} { return ui.sigDraw }
 func (ui *UI) DrawCycle() {
 
 	cycle := time.Tick(DrawCycleDuration)
@@ -270,8 +267,7 @@ func (ui *UI) ConfirmQuitPrompt() {
 	ui.pageControl.AddPage(PageIDQuitModal, modalView, true, true)
 }
 
-func (ui *UI) GlobalInputHandled(
-	view UIView, event *tcell.EventKey, setFocus func(p tview.Primitive)) bool {
+func (ui *UI) GlobalInputHandled(view UIView, event *tcell.EventKey, setFocus func(p tview.Primitive)) bool {
 
 	inKey := event.Key()
 	inMask := event.Modifiers()
@@ -341,14 +337,23 @@ func (ui *UI) GlobalInputHandled(
 // -----------------------------------------------------------------------------
 
 func (ui *UI) AddLibrary(library *Library) {
+
 	ui.libraryView.AddLibrary(library)
 	ui.sigDraw <- ui.libraryView
 }
+
 func (ui *UI) AddLibraryDirectory(library *Library, dir string) {
+
 	ui.libraryView.AddLibraryDirectory(library, dir)
 	ui.sigDraw <- ui.libraryView
 }
+
+// -----------------------------------------------------------------------------
+//	(pimm) MediaView
+// -----------------------------------------------------------------------------
+
 func (ui *UI) AddMedia(library *Library, media *Media) {
+
 	ui.mediaView.AddMedia(library, media)
 	ui.sigDraw <- ui.mediaView
 }

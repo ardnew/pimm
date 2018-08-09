@@ -152,8 +152,8 @@ func (view *MediaView) appendMedia(library *Library, media *Media) int {
 	// multiple library scanners may be trying to add content to the table at
 	// the same time. a mutex will ensure no table position conflicts
 	view.Lock()
-	row := view.GetRowCount()
-	view.SetCell(row, 0, cell)
+	//row := view.GetRowCount()
+	//view.SetCell(row, 0, cell)
 	view.mediaIndex = append(view.mediaIndex, NewCellInfo(cell, library, media))
 	view.tableIndex = append(view.tableIndex, row)
 	view.Unlock()
@@ -180,7 +180,7 @@ func (view *MediaView) applyExcludeFilter(exclude map[string]byte) {
 		libPath := fmt.Sprintf("%s//%s", info.library.Path(), info.media.Dir())
 		if _, excluded := exclude[libPath]; !excluded {
 			view.tableIndex = append(view.tableIndex, i)
-			view.SetCell(count, 0, info.cell)
+			//view.SetCell(count, 0, info.cell)
 			count++
 			view.UI().SigDraw() <- view
 		}

@@ -10,20 +10,20 @@ import (
 )
 
 type Media struct {
-	dir     string
-	name    string
-	path    string
-	size    int64
-	mtime   time.Time
-	hash    uint64
-	library *Library
+	dir     string    // absolute path to the parent dir
+	name    string    // file name
+	path    string    // absolute path to the file
+	size    int64     // file size (in bytes)
+	mtime   time.Time // file last modification time (local time)
+	hash    uint64    // TBD: hash digest of file content
+	library *Library  // library to which this media belongs
 }
 
 func NewMedia(library *Library, info os.FileInfo, absPath string) (*Media, *ErrorCode) {
 
 	fh, err := os.Open(absPath)
 	if nil != err {
-		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to open file for hashing: %q", absPath))
+		return nil, NewErrorCode(EFileHash, fmt.Sprintf("failed to open file: %q", absPath))
 	}
 	defer fh.Close()
 
@@ -41,7 +41,7 @@ func NewMedia(library *Library, info os.FileInfo, absPath string) (*Media, *Erro
 	dir := path.Dir(absPath)
 	name := path.Base(absPath)
 
-	return &Media{
+	media := Media{
 		dir:     dir,
 		name:    name,
 		path:    absPath,
@@ -49,7 +49,8 @@ func NewMedia(library *Library, info os.FileInfo, absPath string) (*Media, *Erro
 		mtime:   info.ModTime().Local(),
 		hash:    hash,
 		library: library,
-	}, nil
+	}
+	return &media, nil
 }
 
 func (m *Media) String() string {

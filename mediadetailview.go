@@ -28,7 +28,7 @@ func NewDetailFormItem(parent *MediaDetailView, item int, name string) *DetailFo
 	field := tview.NewInputField()
 	field.SetLabel(name)
 
-	field.SetAcceptanceFunc(func(text string, lastChar rune) bool { return false })
+	field.SetAcceptanceFunc(nil)
 	field.SetChangedFunc(nil)
 	field.SetDoneFunc(nil)
 	field.SetFinishedFunc(nil)

@@ -9,25 +9,26 @@ import (
 	"github.com/rivo/tview"
 )
 
+// this type is stored in the TreeNode's "reference" field for easy storage
+// of auxilliary data associated with the node
 type NodeInfo struct {
-	library *Library
-	parent  *tview.TreeNode
-	path    string
-	include bool
+	library *Library        // the library to which this node belongs
+	parent  *tview.TreeNode // the immediate parent node
+	include bool            // shows this node's media in the media browser
 }
 
 type LibraryView struct {
-	*tview.TreeView
-	ui           interface{}
-	obscura      *tview.Flex
-	proportion   int
-	absolute     int
-	isAbsolute   bool
-	isVisible    bool
-	focusRune    rune
-	selectedNode *tview.TreeNode
-	dirIndex     map[*Library]map[string]*tview.TreeNode
-	excludeDir   map[string]byte
+	*tview.TreeView                                         // the base primitive on which this view is built
+	ui              interface{}                             // a ref to the application UI composition
+	obscura         *tview.Flex                             // a ref to the parent primitive that controls this view's visibility
+	proportion      int                                     // the factor by which this primitive's size will change when its parent changes size (NOTE: absolute must be set to 0)
+	absolute        int                                     // the absolute size this primitive will be regardless of its parent's change in size (NOTE: proportion must be set to 0)
+	isAbsolute      bool                                    // indicates absolute size is used (true), or proportional size is used (false)
+	isVisible       bool                                    // indicates this view is currently visible
+	focusRune       rune                                    // character rune used as the global keyboard accelerator to focus on this view
+	selectedNode    *tview.TreeNode                         // the currently selected node in the tree
+	dirIndex        map[*Library]map[string]*tview.TreeNode // selection map to locate TreeNodes
+	excludeDir      map[string]byte
 }
 
 func NewLibraryView(container *tview.Flex) *LibraryView {
@@ -187,7 +188,7 @@ func (view *LibraryView) InputHandler() func(event *tcell.EventKey, setFocus fun
 func (view *LibraryView) updateNodeAppearance(node *tview.TreeNode, isSelected bool) {
 
 	info := node.GetReference().(*NodeInfo)
-	name := path.Base(info.path)
+	name := path.Base(info.library.Path())
 
 	isColor := true
 	isUnicode := view.UI().options.UTF8.bool

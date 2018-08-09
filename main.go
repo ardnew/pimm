@@ -39,10 +39,13 @@ type Options struct {
 func isLocaleUTF8() bool {
 
 	const LocaleEnvVar = "LANG"
+
+	// first try to determine the char encoding using the LANG environment var
 	localeLang := os.Getenv(LocaleEnvVar)
+	// ending with the string "[...]UTF-8" is good enough for me
 	isUTF8, err := regexp.MatchString("\\.UTF-8$", localeLang)
 	if nil != err {
-		// don't use UTF-8 if locale is screwy enough to break this regex, seriously
+		// don't use UTF-8 if locale is screwy enough, seriously
 		warnLog.Logf("failed to parse env: %q: %s", LocaleEnvVar, err)
 		return false
 	}
@@ -59,6 +62,7 @@ func initOptions() (options *Options, err error) {
 				err = NewErrorCode(EUsage)
 				return
 			}
+			// note this "err" is a named output paramater
 			err = NewErrorCode(EArgs, fmt.Sprintf("%s", recovered))
 		}
 	}()
@@ -108,25 +112,32 @@ func initLibrary(options *Options) []*Library {
 	var library []*Library
 	var gateKeeper sync.WaitGroup
 
+	// any remaining args were not handled by the options parser. they are then
+	// considered to be file paths of libraries to scan
 	libArgs := options.Args()
-	libQueue := make(chan *Library, len(libArgs))
+	numLibs := len(libArgs)
+	libQueue := make(chan *Library, numLibs)
 
+	// dispatch a single goroutine per library to verify each concurrently
+	gateKeeper.Add(numLibs)
 	for _, libPath := range libArgs {
-		gateKeeper.Add(1)
 		go func(libPath string) {
 			defer gateKeeper.Done()
 			lib, err := NewLibrary(libPath, make([]string, 0))
 			if nil != err {
 				errLog.Log(err.Reason)
-				return
+				return // exit the goroutine, skip posting to the chan queue
 			}
 			libQueue <- lib
 		}(libPath)
 	}
+
+	// wait until all goroutines have verified the libraries paths before
+	// continuing on with scanning their content
 	gateKeeper.Wait()
 	close(libQueue)
 
-	// prep the library to start listening for media, adding them to the view
+	// any libraries that were added to the queue are considered valid
 	for lib := range libQueue {
 		library = append(library, lib)
 	}
@@ -135,14 +146,18 @@ func initLibrary(options *Options) []*Library {
 
 func populateLibrary(options *Options, library []*Library, ui *UI) {
 
+	// all libraries are considered valid at this point. dispatch a single
+	// goroutine for each library that will listen on various channels for
+	// content discovered by the concurrent scanners
 	for _, lib := range library {
 		ui.AddLibrary(lib)
-
 		go func(lib *Library, ui *UI) {
 			for {
 				select {
+				// library scanner discovered a subdirectory
 				case subdir := <-lib.SigDir():
 					ui.AddLibraryDirectory(lib, subdir)
+				// library scanner discovered media
 				case media := <-lib.SigMedia():
 					ui.AddMedia(lib, media)
 				}
@@ -150,6 +165,9 @@ func populateLibrary(options *Options, library []*Library, ui *UI) {
 		}(lib, ui)
 	}
 
+	// and now dispatch the concurrent scanners -- one per library. as media or
+	// other types of content are discovered, they will be fed into the receiver
+	// goroutines dispatched above which will decide what to do with them.
 	for _, lib := range library {
 		infoLog.Logf("initiating scan: %q", lib.Name())
 		go func(lib *Library) {
@@ -164,18 +182,22 @@ func populateLibrary(options *Options, library []*Library, ui *UI) {
 			}
 		}(lib)
 	}
+
+	// we don't wait for the scanning to finish. go ahead and launch the UI for
+	// progress indicators and anything else the user can get away with while
+	// they work.
 }
 
 func main() {
 
 	// parse options and command line arguments
-	options, ok := initOptions()
-	if nil != ok {
-		switch ok.(type) {
+	options, err := initOptions()
+	if nil != err {
+		switch err.(type) {
 		case *ErrorCode:
-			errLog.Die(ok.(*ErrorCode))
+			errLog.Die(err.(*ErrorCode))
 		default:
-			errLog.Die(NewErrorCode(EArgs, fmt.Sprintf("%s", ok)))
+			errLog.Die(NewErrorCode(EArgs, fmt.Sprintf("%s", err)))
 		}
 	}
 

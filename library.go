@@ -8,7 +8,7 @@ import (
 )
 
 type Library struct {
-	workingDir string              // user's $PWD
+	workingDir string              // user's CWD
 	path       string              // absolute path to library
 	name       string              // logical filename portion of path
 	depthLimit uint                // recursive traversal depth
@@ -18,11 +18,12 @@ type Library struct {
 	totalSize  int64               // total size of all media files discovered
 	sigDir     chan string         // subdirectory discovery
 	sigMedia   chan *Media         // media discovery
-	sigWork    chan bool           // coordinates updates
+	sigWork    chan bool           // indicates scanner activity
 }
 
 const (
 	LibraryDepthUnlimited = 0
+	MaxScannersPerLibrary = 1
 )
 
 func NewLibrary(libName string, ignore []string) (*Library, *ErrorCode) {
@@ -49,7 +50,7 @@ func NewLibrary(libName string, ignore []string) (*Library, *ErrorCode) {
 		return nil, NewErrorCode(EInvalidLibrary, fmt.Sprintf("%s: %q", err, libName))
 	}
 
-	return &Library{
+	library := Library{
 		workingDir: dir,
 		path:       libPath,
 		name:       path.Base(libPath),
@@ -60,8 +61,9 @@ func NewLibrary(libName string, ignore []string) (*Library, *ErrorCode) {
 		totalSize:  0,
 		sigDir:     make(chan string),
 		sigMedia:   make(chan *Media),
-		sigWork:    make(chan bool, 1),
-	}, nil
+		sigWork:    make(chan bool, MaxScannersPerLibrary),
+	}
+	return &library, nil
 }
 
 func (l *Library) String() string {
@@ -175,10 +177,15 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 			return NewErrorCode(EDirOpen, fmt.Sprintf("%s: %q", err, relPath))
 		}
 
+		// initialize this subdirectory's list of content/filenames
 		l.media[currPath] = []*Media{}
+
+		// don't add the library path itself to its list of subdirectories
 		if depth > 1 {
 			l.sigDir <- currPath
 		}
+
+		// recursively walk all of this subdirectory's contents
 		for _, info := range contentInfo {
 			err := l.Walk(path.Join(currPath, info.Name()), depth+1)
 			if nil != err {
@@ -188,7 +195,8 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 		return nil
 
 	case (mode & os.ModeSymlink) > 0:
-		return NewErrorCode(EInvalidFile, fmt.Sprintf("not following symlinks, skipping: %q", relPath))
+		// symlinks currently unhandled
+		return NewErrorCode(EInvalidFile, fmt.Sprintf("not following symlinks (unhandled), skipping: %q", relPath))
 
 	case (mode & (os.ModeDevice | os.ModeNamedPipe | os.ModeSocket | os.ModeCharDevice)) > 0:
 		// file is not a regular file, not supported
@@ -196,14 +204,20 @@ func (l *Library) Walk(currPath string, depth uint) *ErrorCode {
 	}
 
 	// if we made it here, we have a regular file. add it as a media candidate
+	// only if we were able to successfully os.Lstat() it
 	media, errCode := NewMedia(l, fileInfo, currPath)
 	if nil != errCode {
 		return errCode
 	}
-	l.totalMedia++
+
+	// append the media to this subdirectory's list of content/filenames
+	l.media[currDir] = append(l.media[currDir], media)
+
+	// update library counters
+	l.totalMedia += 1
 	l.totalSize += media.Size()
 
-	l.media[currDir] = append(l.media[currDir], media)
+	// finally, notify the consumer of our media discovery
 	l.sigMedia <- media
 
 	return nil
@@ -213,12 +227,17 @@ func (l *Library) Scan() *ErrorCode {
 
 	var err *ErrorCode = nil
 
+	// the sigWork channel is buffered so that we can limit the number of
+	// scanners concurrently operating on this library. the writes will fail and
+	// fallback on the default select case if another scanner has already pushed
+	// a value into the sigWork channel. so be sure to check the return value
+	// when calling Scan()!
 	select {
 	case l.sigWork <- true:
 		err = l.Walk(l.path, 1)
 		<-l.sigWork
 	default:
-		err = NewErrorCode(ELibraryBusy, fmt.Sprintf("cannot scan library %q", l.path))
+		err = NewErrorCode(ELibraryBusy, fmt.Sprintf("cannot scan library until current scan finishes %q", l.path))
 	}
 	return err
 }

@@ -8,11 +8,13 @@ import (
 	"sync"
 )
 
+// type indicating the general reason for application termination
 type ExitCode struct {
 	Code int
 	Desc string
 }
 
+// type containing an explicit reason/message for using the contained ExitCode
 type ErrorCode struct {
 	Reason string
 	*ExitCode
@@ -71,13 +73,6 @@ const (
 	warnLogID
 	errLogID
 	consoleLogCount
-)
-
-const (
-	scColor   = true
-	scNoColor = false
-	scUTF8    = true
-	scNoUTF8  = false
 )
 
 var MoonPhase = [8]rune{'🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'}
