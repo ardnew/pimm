@@ -144,6 +144,36 @@ func initLibrary(options *Options) []*Library {
 	return library
 }
 
+func watchLibrary(lib *Library, ui *UI) {
+	// continuously monitors a library's signal channels for new content, which
+	// creates or processes the content accordingly
+	for {
+		select {
+		// library scanner discovered a subdirectory
+		case subdir := <-lib.SigDir():
+			ui.AddLibraryDirectory(lib, subdir)
+		// library scanner discovered media
+		case media := <-lib.SigMedia():
+			ui.AddMedia(lib, media)
+		}
+	}
+}
+
+func scanLibrary(lib *Library) {
+	// recursively walks a library path, notifying the library's signal channels
+	// whenever any sort of content is found. the scan time and details are
+	// logged to the info log
+	start := time.Now()
+	err := lib.Scan()
+	delta := time.Since(start)
+	if nil != err {
+		errLog.Log(err)
+	} else {
+		infoLog.Logf("finished scan: %q (%s) %d files, %s",
+			lib.Name(), delta.Round(time.Millisecond), lib.TotalMedia(), SizeStr(lib.TotalSize(), false))
+	}
+}
+
 func populateLibrary(options *Options, library []*Library, ui *UI) {
 
 	// all libraries are considered valid at this point. dispatch a single
@@ -151,18 +181,7 @@ func populateLibrary(options *Options, library []*Library, ui *UI) {
 	// content discovered by the concurrent scanners
 	for _, lib := range library {
 		ui.AddLibrary(lib)
-		go func(lib *Library, ui *UI) {
-			for {
-				select {
-				// library scanner discovered a subdirectory
-				case subdir := <-lib.SigDir():
-					ui.AddLibraryDirectory(lib, subdir)
-				// library scanner discovered media
-				case media := <-lib.SigMedia():
-					ui.AddMedia(lib, media)
-				}
-			}
-		}(lib, ui)
+		go watchLibrary(lib, ui)
 	}
 
 	// and now dispatch the concurrent scanners -- one per library. as media or
@@ -170,17 +189,7 @@ func populateLibrary(options *Options, library []*Library, ui *UI) {
 	// goroutines dispatched above which will decide what to do with them.
 	for _, lib := range library {
 		infoLog.Logf("initiating scan: %q", lib.Name())
-		go func(lib *Library) {
-			start := time.Now()
-			err := lib.Scan()
-			delta := time.Since(start)
-			if nil != err {
-				errLog.Log(err)
-			} else {
-				infoLog.Logf("finished scan: %q (%s) %d files, %s",
-					lib.Name(), delta.Round(time.Millisecond), lib.TotalMedia(), SizeStr(lib.TotalSize(), false))
-			}
-		}(lib)
+		go scanLibrary(lib)
 	}
 
 	// we don't wait for the scanning to finish. go ahead and launch the UI for
