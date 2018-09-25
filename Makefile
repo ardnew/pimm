@@ -1,5 +1,5 @@
 # static project definitions
-project      = pimm
+project      = pimmp
 importpath   = ardnew.com/$(project)
 gopathsrc    = $(GOPATH)/src
 gopathbin    = $(GOPATH)/bin
