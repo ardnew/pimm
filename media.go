@@ -1,14 +1,7 @@
 package main
 
-type MediaKind = byte
-
-const (
-	MKAudio MediaKind = 0
-	MKVideo MediaKind = 1
-)
-
 type Media struct {
-	path            string    // full path to media file
+	path            string    // absolute path to media file
 	kind            MediaKind // type of media
 	name            string    // displayed name
 	dateAdded       string    // date media was discovered and added to library
@@ -21,8 +14,8 @@ type Media struct {
 
 type MediaVideo struct {
 	*Media
-	knownSubtitles []string // full path to all subtitles associated
-	subtitles      string   // full path to selected subtitles
+	knownSubtitles []string // absolute path to all subtitles associated
+	subtitles      string   // absolute path to selected subtitles
 }
 
 type MediaAudio struct {
