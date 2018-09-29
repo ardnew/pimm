@@ -23,12 +23,12 @@ func main() {
 		name string
 	)
 
-	kind, name = FileExtMediaKind("yuv")
+	kind, name = MediaKindOfFileExt("yuv")
 	fmt.Printf("%d: %s%s", kind, name, Newline)
 
-	kind, name = FileExtMediaKind("m4b")
+	kind, name = MediaKindOfFileExt("m4b")
 	fmt.Printf("%d: %s%s", kind, name, Newline)
 
-	kind, name = FileExtMediaKind("xxx")
+	kind, name = MediaKindOfFileExt("xxx")
 	fmt.Printf("%d: %s%s", kind, name, Newline)
 }
