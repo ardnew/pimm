@@ -12,23 +12,32 @@
 
 package main
 
-import (
-	"fmt"
-)
+// import (
+// 	"fmt"
+// )
 
 func main() {
 
-	var (
-		kind MediaKind
-		name string
-	)
+	// var (
+	// 	kind MediaKind
+	// 	name string
+	// )
 
-	kind, name = MediaKindOfFileExt("yuv")
-	fmt.Printf("%d: %s%s", kind, name, Newline)
+	// kind, name = MediaKindOfFileExt("yuv")
+	// rawLog.Logln("[Logln()] %d: %s%s", kind, name)
 
-	kind, name = MediaKindOfFileExt("m4b")
-	fmt.Printf("%d: %s%s", kind, name, Newline)
+	// kind, name = MediaKindOfFileExt("m4b")
+	// infoLog.Logln("[Logln()] %d: %s%s", kind, name)
 
-	kind, name = MediaKindOfFileExt("xxx")
-	fmt.Printf("%d: %s%s", kind, name, Newline)
+	// kind, name = MediaKindOfFileExt("xxx")
+	// warnLog.Logln("[Logln()] %d: %s%s", kind, name)
+
+	// kind, name = MediaKindOfFileExt("dct")
+	// errLog.Logln("[Logln()] %d: %s%s", kind, name)
+
+	_, err := NewLibrary("..")
+	if nil != err {
+		errLog.Die(err, true)
+	}
+
 }
