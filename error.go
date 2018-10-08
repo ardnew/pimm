@@ -6,7 +6,8 @@
 // -----------------------------------------------------------------------------
 //
 //  DESCRIPTION
-//    defines types and functions for describing errors to the user
+//    defines types and functions for describing return values and error codes
+//    to the user
 //
 // =============================================================================
 
@@ -17,42 +18,64 @@ import (
 	"strings"
 )
 
-// type ErrorCode contains potential program runtime errors with detailed
-// diagnostic info.
-type ErrorCode struct {
-	Code int    // value of error code
-	Desc string // built-in description of this general purpose error code
-	Info string // additional detail elaborating the error event
+// type ReturnCode contains information describing the reason for program exit,
+// including potential runtime errors with detailed diagnostic info.
+type ReturnCode struct {
+	code int    // value between 0 and 255 (inclusive) for portability
+	desc string // built-in description of this general purpose return code
+	info string // additional detail elaborating the return event
 }
 
-var (
-	EOK             = &ErrorCode{0, "ok", ""}               // no errors, normal return
-	EInvalidLibrary = &ErrorCode{10, "invalid library", ""} // invalid library
-	EUnknown        = &ErrorCode{254, "unknown error", ""}  // unanticipated error encountered
-	EUsage          = &ErrorCode{255, "usage", ""}          // no errors, displays usage help
+// private constants
+const (
+	errorOffset   = 100
+	maxReturnCode = 255
 )
 
-// function NewErrorCode() constructs a new ErrorCode object with a specified
-// error code, description, and info.
-func NewErrorCode(code int, desc string, info string) *ErrorCode {
-	return &ErrorCode{code, desc, info}
+var (
+	// non-error return codes
+	rcOK    = &ReturnCode{0, "ok", ""}    // no errors, normal return
+	rcUsage = &ReturnCode{1, "usage", ""} // no errors, displays usage help
+
+	// error return codes
+	rcInvalidArgs    = &ReturnCode{errorOffset + 0, "invalid arguments", ""}           // invalid command line args
+	rcInvalidLibrary = &ReturnCode{errorOffset + 1, "invalid library", ""}             // invalid library
+	rcLibraryBusy    = &ReturnCode{errorOffset + 2, "library busy", ""}                // library busy with other tasks
+	rcInvalidPath    = &ReturnCode{errorOffset + 3, "invalid path", ""}                // invalid path
+	rcInvalidStat    = &ReturnCode{errorOffset + 4, "error reading file stat", ""}     // file stat error
+	rcDirDepth       = &ReturnCode{errorOffset + 5, "search depth limit exceeded", ""} // directory traversal depth limit exceeded
+	rcDirOpen        = &ReturnCode{errorOffset + 6, "cannot open directory", ""}       // cannot open directory for reading
+	rcInvalidFile    = &ReturnCode{errorOffset + 7, "invalid file", ""}                // some invalid type of file (symlink, FIFO, etc.)
+	rcUnknown        = &ReturnCode{maxReturnCode, "unknown error", ""}                 // unanticipated error encountered
+)
+
+// function NewReturnCode() constructs a new ReturnCode object with a specified
+// return code, description, and info.
+func NewReturnCode(code int, desc string, info string) *ReturnCode {
+	return &ReturnCode{code, desc, info}
 }
 
-// function WithInfo() replaces the info string of an existing ErrorCode object
-// with the specified string and returns the new ErrorCode object. the existing
-// error code and description fields are left unchanged.
-func (c *ErrorCode) WithInfo(info string) *ErrorCode {
-	c.Info = info
+// function withInfo() replaces the info string of an existing ReturnCode object
+// with the specified string and returns the new ReturnCode object. the existing
+// return code and description fields are left unchanged.
+func (c *ReturnCode) withInfo(info string) *ReturnCode {
+	c.info = info
 	return c
 }
 
-// function Error() constructs an error message using the current fields of an
-// ErrorCode object. the Code and Desc fields are required, but Info is not. if
+// function IsError() determines if the return code value of a ReturnCode object
+// is defined as one of the error codes
+func (c *ReturnCode) IsError() bool {
+	return c.code >= errorOffset
+}
+
+// function Error() constructs an error message using the current fields of a
+// ReturnCode object. the Code and Desc fields are required, but Info is not. if
 // info is an empty string or contains only whitespace, then it will not be
 // included in the returned string.
-func (c *ErrorCode) Error() string {
-	s := fmt.Sprintf("%s (%d)", c.Desc, c.Code)
-	i := strings.TrimSpace(c.Info)
+func (c *ReturnCode) Error() string {
+	s := fmt.Sprintf("[C%d] %s", c.code, c.desc)
+	i := strings.TrimSpace(c.info)
 	if len(i) > 0 {
 		s = fmt.Sprintf("%s: %s", s, i)
 	}

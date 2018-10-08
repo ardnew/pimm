@@ -14,7 +14,7 @@ gcflags      =
 gcflags-dbg  = all='-N -l'
 
 # linker flags (see: go tool link -help)
-ldflags-vers = -X "main.VERSION=$(version)" -X "main.REVISION=$(revision)" -X "main.BUILDTIME=$(buildtime)"
+ldflags-vers = -X "main.version=$(version)" -X "main.revision=$(revision)" -X "main.buildtime=$(buildtime)"
 ldflags      = '-w -s $(ldflags-vers)'
 ldflags-dbg  = '$(ldflags-vers)'
 
@@ -34,7 +34,13 @@ install:
 install-dbg:
 	go install -ldflags=$(ldflags-dbg) -gcflags=$(gcflags-dbg) "$(importpath)"
 
+.PHONY: run
+run:
+	go run -ldflags=$(ldflags) -gcflags=$(gcflags) "$(importpath)"
+
 .PHONY: clean
 clean:
 	rm -f "$(gopathsrc)/$(importpath)/$(project)"
 	rm -f "$(gopathbin)/$(project)"
+
+

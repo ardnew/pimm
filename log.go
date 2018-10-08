@@ -33,21 +33,22 @@ type ConsoleLog struct {
 	sync.Mutex
 }
 
+// unexported constants
 const (
-	LOG_FLAGS     = log.Ldate | log.Ltime // flags defining format of log.Logger
-	LOG_DELIMITER = "| "                  // log detail fields delimiter
+	logFlags     = log.Ldate | log.Ltime // flags defining format of log.Logger
+	logDelimiter = "| "                  // log detail fields delimiter
 )
 
 // type LogID is an enum identifying the different kinds of built-in loggers.
 type LogID int
 
-// concrete values of the LogID enum type.
+// unexported constant values of the LogID enum type.
 const (
-	lidRaw LogID = iota
-	lidInfo
-	lidWarn
-	lidError
-	lidCOUNT
+	liRaw LogID = iota
+	liInfo
+	liWarn
+	liError
+	liCOUNT
 )
 
 // Madmen toil surreptitiously in rituals to beckon the moon. Uncover their secrets.
@@ -56,49 +57,51 @@ var MoonPhase = [8]rune{'🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', 
 // var consoleLogPrefix defines the substring prefixes included in log messages
 // to help visually grep for anything you might find significant.
 var (
-	consoleLogPrefix = [lidCOUNT]string{
-		"",    // lidRaw
-		" » ", // lidInfo
-		" » ", // lidWarn
-		" × ", // lidError
+	consoleLogPrefix = [liCOUNT]string{
+		"",    // liRaw
+		"   ", // liInfo
+		" » ", // liWarn
+		" × ", // liError
 	}
 )
 
 // var consoleLog defines each of our loggers.
-var consoleLog = [lidCOUNT]*ConsoleLog{
-	// RawLog:
+var consoleLog = [liCOUNT]*ConsoleLog{
+	// rawLog:
 	&ConsoleLog{
-		prefix: consoleLogPrefix[lidRaw],
+		prefix: consoleLogPrefix[liRaw],
 		writer: os.Stdout,
-		Logger: log.New(os.Stdout, consoleLogPrefix[lidRaw], 0),
+		Logger: log.New(os.Stdout, consoleLogPrefix[liRaw], 0),
 	},
-	// InfoLog:
+	// infoLog:
 	&ConsoleLog{
-		prefix: consoleLogPrefix[lidInfo],
+		prefix: consoleLogPrefix[liInfo],
 		writer: os.Stdout,
-		Logger: log.New(os.Stdout, consoleLogPrefix[lidInfo], LOG_FLAGS),
+		Logger: log.New(os.Stdout, consoleLogPrefix[liInfo], logFlags),
 	},
-	// WarnLog:
+	// warnLog:
 	&ConsoleLog{
-		prefix: consoleLogPrefix[lidWarn],
+		prefix: consoleLogPrefix[liWarn],
 		writer: os.Stderr,
-		Logger: log.New(os.Stderr, consoleLogPrefix[lidWarn], LOG_FLAGS),
+		Logger: log.New(os.Stderr, consoleLogPrefix[liWarn], logFlags),
 	},
-	// ErrLog:
+	// errLog:
 	&ConsoleLog{
-		prefix: consoleLogPrefix[lidError],
+		prefix: consoleLogPrefix[liError],
 		writer: os.Stderr,
-		Logger: log.New(os.Stderr, consoleLogPrefix[lidError], LOG_FLAGS),
+		Logger: log.New(os.Stderr, consoleLogPrefix[liError], logFlags),
 	},
 }
 
 // single instantiation of each of the loggers for all goroutines to share
 // indirectly through use of the exported subroutines below.
 var (
-	rawLog  *ConsoleLog = consoleLog[lidRaw]
-	infoLog *ConsoleLog = consoleLog[lidInfo]
-	warnLog *ConsoleLog = consoleLog[lidWarn]
-	errLog  *ConsoleLog = consoleLog[lidError]
+	isVerboseLog bool // flag used by loggers -only- for determining verbosity
+
+	rawLog  *ConsoleLog = consoleLog[liRaw]
+	infoLog *ConsoleLog = consoleLog[liInfo]
+	warnLog *ConsoleLog = consoleLog[liWarn]
+	errLog  *ConsoleLog = consoleLog[liError]
 )
 
 // function SetWriter() changes the log writer to anything conforming to the
@@ -128,7 +131,7 @@ func (l *ConsoleLog) output(s string) {
 		return
 	}
 	if l != rawLog {
-		l.Print(fmt.Sprintf("%s%s", LOG_DELIMITER, s))
+		l.Print(fmt.Sprintf("%s%s", logDelimiter, s))
 	} else {
 		l.Print(s)
 	}
@@ -148,6 +151,24 @@ func (l *ConsoleLog) Logf(format string, v ...interface{}) {
 	l.output(s)
 }
 
+// function VLog() outputs a given string using the current properties of the
+// logger and each of the variable-number-of arguments. the string will only
+// be output if the verbose flag was set.
+func (l *ConsoleLog) VLog(v ...interface{}) {
+	if isVerboseLog {
+		l.Log(v...)
+	}
+}
+
+// function VLogf() outputs a given string using the current properties of the
+// logger and any specified printf-style format string + arguments. the string
+// will only be output if the verbose flag was set.
+func (l *ConsoleLog) VLogf(format string, v ...interface{}) {
+	if isVerboseLog {
+		l.Logf(format, v...)
+	}
+}
+
 // function LogStackTrace() prints the entire stack trace
 func (l *ConsoleLog) LogStackTrace() {
 	byt := debug.Stack()
@@ -159,15 +180,15 @@ func (l *ConsoleLog) LogStackTrace() {
 	}
 }
 
-// function Die() outputs the details of a given ErrorCode object, and then
-// terminates program execution with the ErrorCode object's return value.
-func (l *ConsoleLog) Die(c *ErrorCode, trace bool) {
-	if EUsage != c {
+// function Die() outputs the details of a given ReturnCode object, and then
+// terminates program execution with the ReturnCode object's return value.
+func (l *ConsoleLog) Die(c *ReturnCode, trace bool) {
+	if rcUsage != c {
 		s := fmt.Sprintf("%s", error(c))
 		l.output(s)
-		if trace {
+		if trace && isVerboseLog {
 			l.LogStackTrace()
 		}
 	}
-	os.Exit(c.Code)
+	os.Exit(c.code)
 }

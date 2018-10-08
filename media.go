@@ -14,29 +14,24 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"strings"
 )
 
 // type Media is used to reference every kind of playable media -- the struct
 // fields are common among both audio and video.
 type Media struct {
-	path            string    // absolute path to media file
-	kind            MediaKind // type of media
-	name            string    // displayed name
-	dateAdded       string    // date media was discovered and added to library
-	playbackCommand string    // full system command used to play media
+	path            string      // absolute path to media file
+	info            os.FileInfo // info stored on the file system
+	kind            MediaKind   // type of media
+	name            string      // displayed name
+	dateAdded       string      // date media was discovered and added to library
+	playbackCommand string      // full system command used to play media
 
 	title       string // official name of media
 	description string // synopsis/summary of media content
 	releaseDate string // date media was produced/released
-}
-
-// type MediaVideo is a specialized type of media containing struct fields
-// relevant only to audio.
-type MediaVideo struct {
-	*Media
-	knownSubtitles []string // absolute path to all associated subtitles
-	subtitles      string   // absolute path to selected subtitles
 }
 
 // type MediaAudio is a specialized type of media containing struct fields
@@ -47,9 +42,30 @@ type MediaAudio struct {
 	track int    // numbered index of where track is located on album
 }
 
+// type MediaVideo is a specialized type of media containing struct fields
+// relevant only to audio.
+type MediaVideo struct {
+	*Media
+	knownSubtitles []string // absolute path to all associated subtitles
+	subtitles      string   // absolute path to selected subtitles
+}
+
 // type MediaKind is an enum identifying the different supported types of
 // playable media.
 type MediaKind int
+
+// function NewMedia() creates and initialized a new Media object. the kind
+// of media is determined automatically, and the MediaKind field is set
+// accordingly. so once the media has been identified, a type assertion can be
+// performed to handle the object appropriately and unambiguously.
+func NewMedia(lib *Library, path string, info os.FileInfo) (*Media, *ReturnCode) {
+
+	return &Media{path, info, mkUnknown, info.Name(), "", "", "", "", ""}, nil
+}
+
+func (m *Media) String() string {
+	return fmt.Sprintf("%s (%d bytes) %v", m.path, m.info.Size(), m.info.ModTime())
+}
 
 // concrete values of the MediaKind enum type.
 const (
@@ -71,12 +87,12 @@ type MediaExt struct {
 }
 
 var (
-	// var AudioExt is a struct defining how mkAudio media files will be
+	// var audioExt is a struct defining how mkAudio media files will be
 	// identified through file name inspection. if a file name extension matches
 	// at least one string in any of the string slices below, then that file is
 	// assumed to be mkAudio. the audio type/encoding of that file is also
 	// assumed to be the map key corresponding to the matching string slice.
-	AudioExt = MediaExt{
+	audioExt = MediaExt{
 		kind: mkAudio,
 		table: &ExtTable{
 			"3D Solar UK Ltd":               []string{"ivs"},
@@ -112,10 +128,10 @@ var (
 			"WavPack":                       []string{"wv"},
 		},
 	}
-	// var VideoExt is a struct defining how mkAudio media files will be
-	// identified through file name inspection. see discussion of AudioExt
+	// var videoExt is a struct defining how mkAudio media files will be
+	// identified through file name inspection. see discussion of audioExt
 	// above. the same assumptions are made here but with mkVideo instead.
-	VideoExt = MediaExt{
+	videoExt = MediaExt{
 		kind: mkVideo,
 		table: &ExtTable{
 			"3GPP":                              []string{"3gp"},
@@ -149,13 +165,13 @@ var (
 	}
 )
 
-// function MediaKindOfFileExt() searches all MediaExt mappings for a given
+// function mediaKindOfFileExt() searches all MediaExt mappings for a given
 // file name extension, returning both the MediaKind and the type/encoding name
 // associated with that file name extension.
-func MediaKindOfFileExt(ext string) (MediaKind, string) {
+func mediaKindOfFileExt(ext string) (MediaKind, string) {
 
 	// iter: all supported kinds of media
-	for _, m := range []MediaExt{AudioExt, VideoExt} {
+	for _, m := range []MediaExt{audioExt, videoExt} {
 		// iter: each entry in current media's file extension table
 		for n, l := range *(m.table) {
 			// iter: each file extension in current table entry
