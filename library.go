@@ -6,14 +6,16 @@
 // -----------------------------------------------------------------------------
 //
 //  DESCRIPTION
-//    defines types and operations for traversing filesystems and managing
-//    user-defined collections of media
+//    defines types and operations for interacting with library databases,
+//    traversing file systems, and managing user-defined collections of media.
 //
 // =============================================================================
 
 package main
 
 import (
+	"ardnew.com/goutil"
+
 	"fmt"
 	"os"
 	"path"
@@ -30,6 +32,8 @@ type Library struct {
 	name string // library name (default: basename of path)
 	dmax uint   // maximum traversal depth (unlimited: 0)
 
+	dataDir string // directory containing all known library databases
+
 	newMedia     chan *Media // media discovery
 	newDirectory chan string // subdirectory discovery
 
@@ -38,36 +42,47 @@ type Library struct {
 
 // unexported constants
 const (
+	defaultDataDir     = "library.db"
 	depthUnlimited     = 0
 	maxLibraryScanners = 1
 )
 
-// function NewLibrary() creates and initializes a new Library ready to scan
-func NewLibrary(lib string, lim uint) (*Library, *ReturnCode) {
+// function NewLibrary() creates and initializes a new Library ready to scan.
+// the library database is also created if one doesn't already exist, otherwise
+// it is opened and prepared for reading.
+func NewLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
+
+	invalidLibrary := func(l, d string, e error) *ReturnCode {
+		info := fmt.Sprintf("NewLibrary(%q, %q): %s", l, d, e)
+		return rcInvalidLibrary.withInfo(info)
+	}
 
 	dir, err := os.Getwd()
 	if nil != err {
-		info := fmt.Sprintf("NewLibrary(%q): %s", lib, err)
-		return nil, rcInvalidLibrary.withInfo(info)
+		return nil, invalidLibrary(lib, dat, err)
 	}
 
 	abs, err := filepath.Abs(lib)
 	if nil != err {
-		info := fmt.Sprintf("NewLibrary(%q): %s", lib, err)
-		return nil, rcInvalidLibrary.withInfo(info)
+		return nil, invalidLibrary(lib, dat, err)
 	}
 
 	fds, err := os.Open(abs)
 	if nil != err {
-		info := fmt.Sprintf("NewLibrary(%q): %s", lib, err)
-		return nil, rcInvalidLibrary.withInfo(info)
+		return nil, invalidLibrary(lib, dat, err)
 	}
 	defer fds.Close()
 
 	_, err = fds.Readdir(0)
 	if nil != err {
-		info := fmt.Sprintf("NewLibrary(%q): %s", lib, err)
-		return nil, rcInvalidLibrary.withInfo(info)
+		return nil, invalidLibrary(lib, dat, err)
+	}
+
+	if exists, _ := goutil.PathExists(dat); !exists {
+		if err := os.MkdirAll(dat, os.ModePerm); nil != err {
+			return nil, invalidLibrary(lib, dat, err)
+		}
+		infoLog.VLog(fmt.Sprintf("created library data directory: %q", dat))
 	}
 
 	library := Library{
@@ -75,7 +90,11 @@ func NewLibrary(lib string, lim uint) (*Library, *ReturnCode) {
 		path: abs,
 		name: path.Base(abs),
 		dmax: lim,
-		//
+
+		// path to the library database directory
+		dataDir: dat,
+
+		// channels for communicating scanner data to the main thread
 		newMedia:     make(chan *Media),
 		newDirectory: make(chan string),
 		scan:         make(chan time.Time, maxLibraryScanners),
@@ -193,4 +212,8 @@ func (l *Library) Scan() *ReturnCode {
 		err = rcLibraryBusy.withInfo(info)
 	}
 	return err
+}
+
+func (l *Library) ReadAll() *ReturnCode {
+	return nil
 }

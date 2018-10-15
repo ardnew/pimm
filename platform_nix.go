@@ -16,7 +16,17 @@
 
 package main
 
-const (
-	Newline = "\n"
-	PathSep = "/"
+import (
+	"os"
 )
+
+const (
+	newLine = "\n"
+	pathSep = "/"
+)
+
+// function homeDir() returns the path to the user's home directory as defined
+// by the user's current HOME environment variable.
+func homeDir() string {
+	return os.Getenv("HOME")
+}

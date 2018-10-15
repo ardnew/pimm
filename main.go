@@ -6,22 +6,25 @@
 // -----------------------------------------------------------------------------
 //
 //  DESCRIPTION
-//    (TBD)
+//    program entry-point and primary controller.
 //
 // =============================================================================
 
 package main
 
 import (
+	"ardnew.com/goutil"
+
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 // versioning information defined by compiler switches in Makefile
 var (
+	identity  string
 	version   string
 	revision  string
 	buildtime string
@@ -44,6 +47,13 @@ type Options struct {
 	*flag.FlagSet
 	UsageHelp Option
 	Verbose   Option
+	LibData   Option
+}
+
+// function configDir() constructs the full path to the default directory
+// containing all of the program's supporting persistent data.
+func configDir() string {
+	return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
 }
 
 // function main() is the program entry point, obviously
@@ -55,6 +65,15 @@ func main() {
 		errLog.Die(err, false)
 	}
 
+	config := configDir()
+	if exists, _ := goutil.PathExists(config); !exists {
+		if err := os.MkdirAll(config, os.ModePerm); nil != err {
+			info := fmt.Sprintf("cannot create configuration directory: %q", config)
+			errLog.Die(rcInvalidConfig.withInfo(info), false)
+		}
+		infoLog.VLog(fmt.Sprintf("created configuration directory: %q", config))
+	}
+
 	// remaining arguments are considered paths to libraries; verify the paths
 	// before assuming valid ones exist for traversal
 	library := initLibrary(options)
@@ -62,7 +81,7 @@ func main() {
 		errLog.Die(rcInvalidLibrary.withInfo("no libraries found"), false)
 	}
 
-	// libraries ready, spool up the initial library scanners
+	// libraries ready, spool up the library scanners
 	populateLibrary(options, library)
 
 	infoLog.Log("ready")
@@ -94,13 +113,14 @@ func initOptions() (options *Options, err *ReturnCode) {
 		}
 	}()
 
+	dataDir := filepath.Join(configDir(), defaultDataDir)
+
 	// define the option properties that the command line parser shall recognize
-	selfName := path.Base(os.Args[0]) // using application name by default
 	options = &Options{
 		// PanicOnError gets trapped by the anon defer'd func() above. the
 		// recover()'d  value will be set to flag.ErrHelp, which we want to
 		// override or print with our error logger
-		FlagSet: flag.NewFlagSet(selfName, flag.PanicOnError),
+		FlagSet: flag.NewFlagSet(identity, flag.PanicOnError),
 		UsageHelp: Option{
 			name:  "help",
 			usage: "display this helpful usage synopsis!",
@@ -111,11 +131,17 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage: "display more detailed output",
 			bool:  false,
 		},
+		LibData: Option{
+			name:   "libdata",
+			usage:  "path used to store library databases",
+			string: dataDir,
+		},
 	}
 
 	// register the command line options we want to handle
 	options.BoolVar(&options.UsageHelp.bool, options.UsageHelp.name, options.UsageHelp.bool, options.UsageHelp.usage)
 	options.BoolVar(&options.Verbose.bool, options.Verbose.name, options.Verbose.bool, options.Verbose.usage)
+	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
 	// display our own
@@ -123,7 +149,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 
 	// the output provided with -help or when a option parse error occurred
 	options.Usage = func() {
-		rawLog.Logf("%s v%s (%s) [%s]", selfName, version, revision, buildtime)
+		rawLog.Logf("%s v%s (%s) [%s]", identity, version, revision, buildtime)
 		rawLog.Log()
 		options.SetOutput(os.Stdout)
 		options.PrintDefaults()
@@ -147,7 +173,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 	return options, parseError
 }
 
-// function initLibrary() verifies all library paths provided, returning a list
+// function initLibrary() validates all library paths provided, returning a list
 // of the valid ones
 func initLibrary(options *Options) []*Library {
 
@@ -159,7 +185,7 @@ func initLibrary(options *Options) []*Library {
 
 	// dispatch a single goroutine per library to verify each concurrently
 	for _, libPath := range libArgs {
-		lib, err := NewLibrary(libPath, depthUnlimited)
+		lib, err := NewLibrary(libPath, options.LibData.string, depthUnlimited)
 		if nil != err {
 			errLog.Die(err, true)
 		}
@@ -174,21 +200,30 @@ func initLibrary(options *Options) []*Library {
 // media discovered (see function watchLibrary() for handlers).
 func populateLibrary(options *Options, library []*Library) {
 
-	// all libraries are considered valid at this point. dispatch a single
-	// goroutine for each library that will listen on various channels for
-	// content discovered by the concurrent scanners
+	// dispatch a single goroutine for each library that will listen on various
+	// channels for content discovered by the concurrent scanners
 	for _, lib := range library {
 		go watchLibrary(lib)
 	}
 
-	// and now dispatch the concurrent scanners -- one per library. as media or
+	// and now dispatch the concurrent scanners, two per library: one reading
+	// from the local database and one reading from the file system. as media or
 	// other types of content are discovered, they will be fed into the receiver
 	// goroutines dispatched above which will decide what to do with them.
 	for _, lib := range library {
+
+		// pulls all of the media already known to exist in the library from the
+		// local database.
 		go func(l *Library) {
-			// recursively walks a library path, notifying the library's signal channels
-			// whenever any sort of content is found. the scan time and details are
-			// logged to the info log
+			//err := l.Scan()
+			//if nil != err {
+			//	errLog.VLog(err)
+			//}
+		}(lib)
+
+		// recursively walks a library's file system, notifying the library's
+		// signal channels whenever any sort of content is found.
+		go func(l *Library) {
 			err := l.Scan()
 			if nil != err {
 				errLog.VLog(err)

@@ -14,7 +14,7 @@ gcflags      =
 gcflags-dbg  = all='-N -l'
 
 # linker flags (see: go tool link -help)
-ldflags-vers = -X "main.version=$(version)" -X "main.revision=$(revision)" -X "main.buildtime=$(buildtime)"
+ldflags-vers = -X "main.identity=$(project)" -X "main.version=$(version)" -X "main.revision=$(revision)" -X "main.buildtime=$(buildtime)"
 ldflags      = '-w -s $(ldflags-vers)'
 ldflags-dbg  = '$(ldflags-vers)'
 

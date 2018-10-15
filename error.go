@@ -46,6 +46,7 @@ var (
 	rcDirDepth       = &ReturnCode{errorOffset + 5, "search depth limit exceeded", ""} // directory traversal depth limit exceeded
 	rcDirOpen        = &ReturnCode{errorOffset + 6, "cannot open directory", ""}       // cannot open directory for reading
 	rcInvalidFile    = &ReturnCode{errorOffset + 7, "invalid file", ""}                // some invalid type of file (symlink, FIFO, etc.)
+	rcInvalidConfig  = &ReturnCode{errorOffset + 8, "invalid configuration", ""}       // invalid configuration settings
 	rcUnknown        = &ReturnCode{maxReturnCode, "unknown error", ""}                 // unanticipated error encountered
 )
 

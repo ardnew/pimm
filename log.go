@@ -7,7 +7,7 @@
 //
 //  DESCRIPTION
 //    provides a collection of types and functions for logging data to a file
-//    or to an output stream such as STDOUT and STDERR
+//    or to an output stream such as STDOUT and STDERR.
 //
 // =============================================================================
 
