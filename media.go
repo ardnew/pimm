@@ -22,7 +22,8 @@ import (
 // type Media is used to reference every kind of playable media -- the struct
 // fields are common among both audio and video.
 type Media struct {
-	path            string      // absolute path to media file
+	absPath         string      // absolute path to media file
+	relPath         string      // CWD-relative path to media file
 	info            os.FileInfo // info stored on the file system
 	kind            MediaKind   // type of media
 	name            string      // displayed name
@@ -58,13 +59,16 @@ type MediaKind int
 // of media is determined automatically, and the MediaKind field is set
 // accordingly. so once the media has been identified, a type assertion can be
 // performed to handle the object appropriately and unambiguously.
-func NewMedia(lib *Library, path string, info os.FileInfo) (*Media, *ReturnCode) {
-
-	return &Media{path, info, mkUnknown, info.Name(), "", "", "", "", ""}, nil
+func NewMedia(lib *Library, absPath, relPath string, info os.FileInfo) (*Media, *ReturnCode) {
+	return &Media{absPath, relPath, info, mkUnknown, info.Name(), "", "", "", "", ""}, nil
 }
 
 func (m *Media) String() string {
-	return fmt.Sprintf("%s (%d bytes) %v", m.path, m.info.Size(), m.info.ModTime())
+	path := m.absPath
+	if "" != m.relPath {
+		path = m.relPath
+	}
+	return fmt.Sprintf("%s (%d bytes) %v", path, m.info.Size(), m.info.ModTime())
 }
 
 // concrete values of the MediaKind enum type.

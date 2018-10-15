@@ -27,10 +27,10 @@ import (
 // together with a rooted search path from which all media file discovery
 // is performed.
 type Library struct {
-	cdir string // current working directory
-	path string // absolute path to library
-	name string // library name (default: basename of path)
-	dmax uint   // maximum traversal depth (unlimited: 0)
+	workingDir string // current working directory
+	absPath    string // absolute path to library
+	name       string // library name (default: basename of path)
+	maxDepth   uint   // maximum traversal depth (unlimited: 0)
 
 	dataDir string // directory containing all known library databases
 
@@ -86,10 +86,10 @@ func NewLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
 	}
 
 	library := Library{
-		cdir: dir,
-		path: abs,
-		name: path.Base(abs),
-		dmax: lim,
+		workingDir: dir,
+		absPath:    abs,
+		name:       path.Base(abs),
+		maxDepth:   lim,
 
 		// path to the library database directory
 		dataDir: dat,
@@ -105,18 +105,18 @@ func NewLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
 // function walk() is the recursive step for the file system traversal, invoked
 // initially by function Scan(). error codes generated in this routine will be
 // returned to the caller of walk() -and- the caller of Scan().
-func (l *Library) walk(cpath string, depth uint) *ReturnCode {
+func (l *Library) walk(absPath string, depth uint) *ReturnCode {
 
 	// get a path to the library relative to current working dir (useful for
 	// displaying diagnostic info to the user)
-	relPath, err := filepath.Rel(l.cdir, cpath)
+	relPath, err := filepath.Rel(l.workingDir, absPath)
 	if nil != err {
-		info := fmt.Sprintf("walk(%q, %d): filepath.Rel(%q): %s", cpath, depth, l.cdir, err)
+		info := fmt.Sprintf("walk(%q, %d): filepath.Rel(%q): %s", absPath, depth, l.workingDir, err)
 		return rcInvalidPath.withInfo(info)
 	}
 
 	// read fs attributes to determine how we handle the file
-	fileInfo, err := os.Lstat(cpath)
+	fileInfo, err := os.Lstat(absPath)
 	if nil != err {
 		// NOTE: we show relPath for readability, -should- be equivalent :^)
 		info := fmt.Sprintf("walk(%q, %d): os.Lstat(): %s", relPath, depth, err)
@@ -128,11 +128,11 @@ func (l *Library) walk(cpath string, depth uint) *ReturnCode {
 	switch {
 	case (mode & os.ModeDir) > 0:
 		// file is directory, walk its contents unless we are at max depth
-		if depthUnlimited != l.dmax && depth > l.dmax {
-			info := fmt.Sprintf("walk(%q, %d): limit = %d", relPath, depth, l.dmax)
+		if depthUnlimited != l.maxDepth && depth > l.maxDepth {
+			info := fmt.Sprintf("walk(%q, %d): limit = %d", relPath, depth, l.maxDepth)
 			return rcDirDepth.withInfo(info)
 		}
-		dir, err := os.Open(cpath)
+		dir, err := os.Open(absPath)
 		if nil != err {
 			info := fmt.Sprintf("walk(%q, %d): os.Open(): %s", relPath, depth, err)
 			return rcDirOpen.withInfo(info)
@@ -147,12 +147,12 @@ func (l *Library) walk(cpath string, depth uint) *ReturnCode {
 		// don't add the library path itself to its list of subdirectories
 		if depth > 1 {
 			// but notify the consumer of a new subdirectory
-			l.newDirectory <- cpath
+			l.newDirectory <- absPath
 		}
 
 		// recursively walk all of this subdirectory's contents
 		for _, info := range contentInfo {
-			err := l.walk(path.Join(cpath, info.Name()), depth+1)
+			err := l.walk(path.Join(absPath, info.Name()), depth+1)
 			if nil != err {
 				// a file/subdir of the current directory threw an error
 				warnLog.VLog(err)
@@ -173,7 +173,7 @@ func (l *Library) walk(cpath string, depth uint) *ReturnCode {
 
 	// if we made it here, we have a regular file. add it as a media candidate
 	// only if we were able to successfully os.Lstat() it
-	media, errCode := NewMedia(l, cpath, fileInfo)
+	media, errCode := NewMedia(l, absPath, relPath, fileInfo)
 	if nil != errCode {
 		return errCode
 	}
@@ -204,11 +204,11 @@ func (l *Library) Scan() *ReturnCode {
 	select {
 	case l.scan <- time.Now():
 		infoLog.VLogf("initiating scan: %q", l.name)
-		err = l.walk(l.path, 1)
+		err = l.walk(l.absPath, 1)
 		elapsed := time.Since(<-l.scan)
 		infoLog.VLogf("finished scan: %q (%s)", l.name, elapsed.Round(time.Millisecond))
 	default:
-		info := fmt.Sprintf("Scan(): max number of scanners reached: %q (max = %d)", l.path, maxLibraryScanners)
+		info := fmt.Sprintf("Scan(): max number of scanners reached: %q (max = %d)", l.absPath, maxLibraryScanners)
 		err = rcLibraryBusy.withInfo(info)
 	}
 	return err
