@@ -68,29 +68,25 @@ var (
 // var consoleLog defines each of our loggers.
 var consoleLog = [liCOUNT]*ConsoleLog{
 	// rawLog:
-	&ConsoleLog{
-		prefix: consoleLogPrefix[liRaw],
-		writer: os.Stdout,
-		Logger: log.New(os.Stdout, consoleLogPrefix[liRaw], 0),
-	},
+	newConsoleLog(
+		consoleLogPrefix[liRaw],
+		os.Stdout,
+		log.New(os.Stdout, consoleLogPrefix[liRaw], 0)),
 	// infoLog:
-	&ConsoleLog{
-		prefix: consoleLogPrefix[liInfo],
-		writer: os.Stdout,
-		Logger: log.New(os.Stdout, consoleLogPrefix[liInfo], logFlags),
-	},
+	newConsoleLog(
+		consoleLogPrefix[liInfo],
+		os.Stdout,
+		log.New(os.Stdout, consoleLogPrefix[liInfo], logFlags)),
 	// warnLog:
-	&ConsoleLog{
-		prefix: consoleLogPrefix[liWarn],
-		writer: os.Stderr,
-		Logger: log.New(os.Stderr, consoleLogPrefix[liWarn], logFlags),
-	},
+	newConsoleLog(
+		consoleLogPrefix[liWarn],
+		os.Stderr,
+		log.New(os.Stderr, consoleLogPrefix[liWarn], logFlags)),
 	// errLog:
-	&ConsoleLog{
-		prefix: consoleLogPrefix[liError],
-		writer: os.Stderr,
-		Logger: log.New(os.Stderr, consoleLogPrefix[liError], logFlags),
-	},
+	newConsoleLog(
+		consoleLogPrefix[liError],
+		os.Stderr,
+		log.New(os.Stderr, consoleLogPrefix[liError], logFlags)),
 }
 
 // single instantiation of each of the loggers for all goroutines to share
@@ -104,21 +100,18 @@ var (
 	errLog  *ConsoleLog = consoleLog[liError]
 )
 
-// function SetWriter() changes the log writer to anything conforming to the
+func newConsoleLog(prefix string, writer io.Writer, logger *log.Logger) *ConsoleLog {
+	return &ConsoleLog{prefix, writer, logger, *new(sync.Mutex)}
+}
+
+// function setWriter() changes the log writer to anything conforming to the
 // io.Writer interface. this may be a file, I/O stream, ncurses panel, etc.
-func (l *ConsoleLog) SetWriter(w io.Writer) {
+func (l *ConsoleLog) setWriter(w io.Writer) {
 	if l.writer != w {
 		l.Lock()
 		l.writer = w
 		l.Logger = log.New(w, l.prefix, l.Flags())
 		l.Unlock()
-	}
-}
-
-// function setLogWriter() updates the writer for all pre-defined loggers.
-func setLogWriter(w io.Writer) {
-	for _, l := range consoleLog {
-		l.SetWriter(w)
 	}
 }
 
@@ -137,57 +130,57 @@ func (l *ConsoleLog) output(s string) {
 	}
 }
 
-// function Log() outputs a given string using the current properties of the
+// function log() outputs a given string using the current properties of the
 // logger and each of the variable-number-of arguments.
-func (l *ConsoleLog) Log(v ...interface{}) {
+func (l *ConsoleLog) log(v ...interface{}) {
 	s := fmt.Sprint(v...)
 	l.output(s)
 }
 
-// function Logf() outputs a given string using the current properties of the
+// function logf() outputs a given string using the current properties of the
 // logger and any specified printf-style format string + arguments.
-func (l *ConsoleLog) Logf(format string, v ...interface{}) {
+func (l *ConsoleLog) logf(format string, v ...interface{}) {
 	s := fmt.Sprintf(format, v...)
 	l.output(s)
 }
 
-// function VLog() outputs a given string using the current properties of the
+// function vlog() outputs a given string using the current properties of the
 // logger and each of the variable-number-of arguments. the string will only
 // be output if the verbose flag was set.
-func (l *ConsoleLog) VLog(v ...interface{}) {
+func (l *ConsoleLog) vlog(v ...interface{}) {
 	if isVerboseLog {
-		l.Log(v...)
+		l.log(v...)
 	}
 }
 
-// function VLogf() outputs a given string using the current properties of the
+// function vlogf() outputs a given string using the current properties of the
 // logger and any specified printf-style format string + arguments. the string
 // will only be output if the verbose flag was set.
-func (l *ConsoleLog) VLogf(format string, v ...interface{}) {
+func (l *ConsoleLog) vlogf(format string, v ...interface{}) {
 	if isVerboseLog {
-		l.Logf(format, v...)
+		l.logf(format, v...)
 	}
 }
 
-// function LogStackTrace() prints the entire stack trace
-func (l *ConsoleLog) LogStackTrace() {
+// function logStackTrace() prints the entire stack trace
+func (l *ConsoleLog) logStackTrace() {
 	byt := debug.Stack()
 	str := string(byt[:])
 	res := regexp.MustCompile("[\\r\\n]+").Split(str, -1)
 
 	for n, s := range res[:len(res)-1] {
-		l.Logf("%d: %s", n, s)
+		l.logf("%d: %s", n, s)
 	}
 }
 
-// function Die() outputs the details of a given ReturnCode object, and then
+// function die() outputs the details of a given ReturnCode object, and then
 // terminates program execution with the ReturnCode object's return value.
-func (l *ConsoleLog) Die(c *ReturnCode, trace bool) {
+func (l *ConsoleLog) die(c *ReturnCode, trace bool) {
 	if rcUsage != c {
 		s := fmt.Sprintf("%s", error(c))
 		l.output(s)
 		if trace && isVerboseLog {
-			l.LogStackTrace()
+			l.logStackTrace()
 		}
 	}
 	os.Exit(c.code)

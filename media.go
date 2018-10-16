@@ -55,11 +55,11 @@ type MediaVideo struct {
 // playable media.
 type MediaKind int
 
-// function NewMedia() creates and initialized a new Media object. the kind
+// function newMedia() creates and initialized a new Media object. the kind
 // of media is determined automatically, and the MediaKind field is set
 // accordingly. so once the media has been identified, a type assertion can be
 // performed to handle the object appropriately and unambiguously.
-func NewMedia(lib *Library, absPath, relPath string, info os.FileInfo) (*Media, *ReturnCode) {
+func newMedia(lib *Library, absPath, relPath string, info os.FileInfo) (*Media, *ReturnCode) {
 	return &Media{absPath, relPath, info, mkUnknown, info.Name(), "", "", "", "", ""}, nil
 }
 

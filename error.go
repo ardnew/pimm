@@ -34,25 +34,26 @@ const (
 
 var (
 	// non-error return codes
-	rcOK    = &ReturnCode{0, "ok", ""}    // no errors, normal return
-	rcUsage = &ReturnCode{1, "usage", ""} // no errors, displays usage help
+	rcOK    = newReturnCode(0, "ok", "")    // no errors, normal return
+	rcUsage = newReturnCode(1, "usage", "") // no errors, displays usage help
 
 	// error return codes
-	rcInvalidArgs    = &ReturnCode{errorOffset + 0, "invalid arguments", ""}           // invalid command line args
-	rcInvalidLibrary = &ReturnCode{errorOffset + 1, "invalid library", ""}             // invalid library
-	rcLibraryBusy    = &ReturnCode{errorOffset + 2, "library busy", ""}                // library busy with other tasks
-	rcInvalidPath    = &ReturnCode{errorOffset + 3, "invalid path", ""}                // invalid path
-	rcInvalidStat    = &ReturnCode{errorOffset + 4, "error reading file stat", ""}     // file stat error
-	rcDirDepth       = &ReturnCode{errorOffset + 5, "search depth limit exceeded", ""} // directory traversal depth limit exceeded
-	rcDirOpen        = &ReturnCode{errorOffset + 6, "cannot open directory", ""}       // cannot open directory for reading
-	rcInvalidFile    = &ReturnCode{errorOffset + 7, "invalid file", ""}                // some invalid type of file (symlink, FIFO, etc.)
-	rcInvalidConfig  = &ReturnCode{errorOffset + 8, "invalid configuration", ""}       // invalid configuration settings
-	rcUnknown        = &ReturnCode{maxReturnCode, "unknown error", ""}                 // unanticipated error encountered
+	rcInvalidArgs     = newReturnCode(errorOffset+0, "invalid arguments", "")           // invalid command line args
+	rcInvalidLibrary  = newReturnCode(errorOffset+1, "invalid library", "")             // invalid library
+	rcLibraryBusy     = newReturnCode(errorOffset+2, "library busy", "")                // library busy with other tasks
+	rcInvalidPath     = newReturnCode(errorOffset+3, "invalid path", "")                // invalid path
+	rcInvalidStat     = newReturnCode(errorOffset+4, "error reading file stat", "")     // file stat error
+	rcDirDepth        = newReturnCode(errorOffset+5, "search depth limit exceeded", "") // directory traversal depth limit exceeded
+	rcDirOpen         = newReturnCode(errorOffset+6, "cannot open directory", "")       // cannot open directory for reading
+	rcInvalidFile     = newReturnCode(errorOffset+7, "invalid file", "")                // some invalid type of file (symlink, FIFO, etc.)
+	rcInvalidConfig   = newReturnCode(errorOffset+8, "invalid configuration", "")       // invalid configuration settings
+	rcInvalidDatabase = newReturnCode(errorOffset+9, "invalid database", "")            // failed to create a media database
+	rcUnknown         = newReturnCode(maxReturnCode, "unknown error", "")               // unanticipated error encountered
 )
 
-// function NewReturnCode() constructs a new ReturnCode object with a specified
+// function newReturnCode() constructs a new ReturnCode object with a specified
 // return code, description, and info.
-func NewReturnCode(code int, desc string, info string) *ReturnCode {
+func newReturnCode(code int, desc string, info string) *ReturnCode {
 	return &ReturnCode{code, desc, info}
 }
 
@@ -64,9 +65,9 @@ func (c *ReturnCode) withInfo(info string) *ReturnCode {
 	return c
 }
 
-// function IsError() determines if the return code value of a ReturnCode object
+// function isError() determines if the return code value of a ReturnCode object
 // is defined as one of the error codes
-func (c *ReturnCode) IsError() bool {
+func (c *ReturnCode) isError() bool {
 	return c.code >= errorOffset
 }
 

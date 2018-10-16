@@ -62,33 +62,33 @@ func main() {
 	// parse options and command line arguments
 	options, err := initOptions()
 	if nil != err {
-		errLog.Die(err, false)
+		errLog.die(err, false)
 	}
 
 	config := configDir()
 	if exists, _ := goutil.PathExists(config); !exists {
 		if err := os.MkdirAll(config, os.ModePerm); nil != err {
 			info := fmt.Sprintf("cannot create configuration directory: %q", config)
-			errLog.Die(rcInvalidConfig.withInfo(info), false)
+			errLog.die(rcInvalidConfig.withInfo(info), false)
 		}
-		infoLog.VLog(fmt.Sprintf("created configuration directory: %q", config))
+		infoLog.vlog(fmt.Sprintf("created configuration directory: %q", config))
 	}
 
 	// remaining arguments are considered paths to libraries; verify the paths
 	// before assuming valid ones exist for traversal
 	library := initLibrary(options)
 	if 0 == len(library) {
-		errLog.Die(rcInvalidLibrary.withInfo("no libraries found"), false)
+		errLog.die(rcInvalidLibrary.withInfo("no libraries found"), false)
 	}
 
 	// libraries ready, spool up the library scanners
 	populateLibrary(options, library)
 
-	infoLog.Log("ready")
+	infoLog.log("ready")
 	for {
 	}
 
-	infoLog.Die(rcOK.withInfo("have a nice day!"), false)
+	infoLog.die(rcOK.withInfo("have a nice day!"), false)
 }
 
 // function initOptions() parses all command line arguments and prepares the
@@ -149,11 +149,11 @@ func initOptions() (options *Options, err *ReturnCode) {
 
 	// the output provided with -help or when a option parse error occurred
 	options.Usage = func() {
-		rawLog.Logf("%s v%s (%s) [%s]", identity, version, revision, buildtime)
-		rawLog.Log()
+		rawLog.logf("%s v%s (%s) [%s]", identity, version, revision, buildtime)
+		rawLog.log()
 		options.SetOutput(os.Stdout)
 		options.PrintDefaults()
-		rawLog.Log()
+		rawLog.log()
 	}
 
 	// yeaaaaaaah, now we do it
@@ -185,9 +185,9 @@ func initLibrary(options *Options) []*Library {
 
 	// dispatch a single goroutine per library to verify each concurrently
 	for _, libPath := range libArgs {
-		lib, err := NewLibrary(libPath, options.LibData.string, depthUnlimited)
+		lib, err := newLibrary(libPath, options.LibData.string, depthUnlimited)
 		if nil != err {
-			errLog.Die(err, true)
+			errLog.die(err, true)
 		}
 		library = append(library, lib)
 	}
@@ -217,16 +217,16 @@ func populateLibrary(options *Options, library []*Library) {
 		go func(l *Library) {
 			//err := l.Scan()
 			//if nil != err {
-			//	errLog.VLog(err)
+			//	errLog.vlog(err)
 			//}
 		}(lib)
 
 		// recursively walks a library's file system, notifying the library's
 		// signal channels whenever any sort of content is found.
 		go func(l *Library) {
-			err := l.Scan()
+			err := l.scan()
 			if nil != err {
-				errLog.VLog(err)
+				errLog.vlog(err)
 			}
 		}(lib)
 	}
@@ -245,12 +245,12 @@ func watchLibrary(lib *Library) {
 		select {
 		// library scanner discovered a subdirectory
 		//case subdir := <-lib.newDirectory:
-		//	infoLog.VLogf("entering: %q", subdir)
+		//	infoLog.vlogf("entering: %q", subdir)
 		case <-lib.newDirectory:
 
 		// library scanner discovered media
 		case media := <-lib.newMedia:
-			infoLog.VLogf("processed: %q", media)
+			infoLog.vlogf("processed: %q", media)
 		}
 	}
 }
