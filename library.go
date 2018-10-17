@@ -93,7 +93,7 @@ func newLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
 	}
 
 	// open or create the library database if it doesn't exist
-	dbase, ret := newDatabase(abs, dat)
+	dba, ret := newDatabase(abs, dat)
 	if nil != ret {
 		return nil, ret
 	}
@@ -106,13 +106,19 @@ func newLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
 
 		// path to the library database directory
 		dataDir: dat,
-		db:      dbase,
+		db:      dba,
 
 		// channels for communicating scanner data to the main thread
 		newMedia:     make(chan *Media),
 		newDirectory: make(chan string),
 		scanTime:     make(chan time.Time, maxLibraryScanners),
 	}, nil
+}
+
+// creates a string representation of the Library for easy identification in
+// logs
+func (l *Library) String() string {
+	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.db)
 }
 
 // function walk() is the recursive step for the file system traversal, invoked
@@ -220,6 +226,7 @@ func (l *Library) scan() *ReturnCode {
 		err = l.walk(l.absPath, 1)
 		elapsed := time.Since(<-l.scanTime)
 		infoLog.vlogf("finished scan: %q (%s)", l.name, elapsed.Round(time.Millisecond))
+		//infoLog.vlogf("created library: %s", l)
 	default:
 		info := fmt.Sprintf("scan(): max number of scanners reached: %q (max = %d)", l.absPath, maxLibraryScanners)
 		err = rcLibraryBusy.withInfo(info)

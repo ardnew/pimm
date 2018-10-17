@@ -17,8 +17,8 @@ package main
 import (
 	"ardnew.com/goutil"
 
-	//	"github.com/HouzuoGuo/tiedot/db"
-	//  "github.com/HouzuoGuo/tiedot/dberr"
+	"github.com/HouzuoGuo/tiedot/db"
+	//"github.com/HouzuoGuo/tiedot/dberr"
 
 	"fmt"
 	"os"
@@ -26,11 +26,18 @@ import (
 	"strings"
 )
 
+const (
+	colAudio = "Audio"
+	colVideo = "Video"
+)
+
 type Database struct {
-	dbPath  string // absolute path to database directory
-	absPath string // absolute path to library
-	name    string // absPath checksum (name of database directory)
+	absPath string // absolute path to database directory
+	libPath string // absolute path to library
+	name    string // libPath checksum (name of database directory)
 	dataDir string // directory containing all known library databases
+
+	db *db.DB // interactive database object
 }
 
 func newDatabase(abs string, dat string) (*Database, *ReturnCode) {
@@ -52,5 +59,52 @@ func newDatabase(abs string, dat string) (*Database, *ReturnCode) {
 		infoLog.vlog(fmt.Sprintf("created database: %q (%q)", sum, abs))
 	}
 
-	return &Database{path, abs, sum, dat}, nil
+	db, err := db.OpenDB(path)
+	if nil != err {
+		return nil, invalidDatabase(abs, dat, err)
+	}
+
+	var hasAudio, hasVideo bool
+	for _, name := range db.AllCols() {
+		n := strings.TrimSpace(name)
+		hasAudio = hasAudio || n == colAudio
+		hasVideo = hasVideo || n == colVideo
+	}
+
+	createCol := func(has bool, col, sum string) *ReturnCode {
+		if !has {
+			if err := db.Create(col); nil != err {
+				return invalidDatabase(abs, dat, err) // TODO: NEW ReturnCode
+			}
+			infoLog.vlog(fmt.Sprintf("created collection: %q (%s)", col, sum))
+		}
+		return nil
+	}
+
+	if ret := createCol(hasAudio, colAudio, sum); nil != ret {
+		return nil, ret
+	}
+	if ret := createCol(hasVideo, colVideo, sum); nil != ret {
+		return nil, ret
+	}
+
+	err = db.Close()
+	if nil != err {
+		return nil, invalidDatabase(abs, dat, err) // TODO: NEW ReturnCode
+	}
+
+	return &Database{
+		absPath: path,
+		libPath: abs,
+		name:    sum,
+		dataDir: dat,
+
+		db: db,
+	}, nil
+}
+
+// creates a string representation of the Database for easy identification in
+// logs
+func (d *Database) String() string {
+	return fmt.Sprintf("{%q,%s}", d.dataDir, d.name)
 }
