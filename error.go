@@ -48,6 +48,7 @@ var (
 	rcInvalidFile     = newReturnCode(errorOffset+7, "invalid file", "")                // some invalid type of file (symlink, FIFO, etc.)
 	rcInvalidConfig   = newReturnCode(errorOffset+8, "invalid configuration", "")       // invalid configuration settings
 	rcInvalidDatabase = newReturnCode(errorOffset+9, "invalid database", "")            // failed to create a media database
+	rcDatabaseError   = newReturnCode(errorOffset+10, "database operation failed", "")  // failed to perform an operation on the database
 	rcUnknown         = newReturnCode(maxReturnCode, "unknown error", "")               // unanticipated error encountered
 )
 

@@ -116,7 +116,7 @@ func newLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
 }
 
 // creates a string representation of the Library for easy identification in
-// logs
+// logs.
 func (l *Library) String() string {
 	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.db)
 }

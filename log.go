@@ -100,6 +100,8 @@ var (
 	errLog  *ConsoleLog = consoleLog[liError]
 )
 
+// function newConsoleLog() creates a new ConsoleLog struct with the given
+// args as fields and a new sync.Mutex semaphore all its very own.
 func newConsoleLog(prefix string, writer io.Writer, logger *log.Logger) *ConsoleLog {
 	return &ConsoleLog{prefix, writer, logger, *new(sync.Mutex)}
 }

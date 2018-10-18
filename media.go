@@ -63,7 +63,7 @@ func newMedia(lib *Library, absPath, relPath string, info os.FileInfo) (*Media, 
 	return &Media{absPath, relPath, info, mkUnknown, info.Name(), "", "", "", "", ""}, nil
 }
 
-// creates a string representation of the Media for easy identification in logs
+// creates a string representation of the Media for easy identification in logs.
 func (m *Media) String() string {
 	path := m.absPath
 	if "" != m.relPath {
