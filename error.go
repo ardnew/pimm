@@ -59,11 +59,18 @@ func newReturnCode(code int, desc string, info string) *ReturnCode {
 }
 
 // function withInfo() replaces the info string of an existing ReturnCode object
-// with the specified string and returns the new ReturnCode object. the existing
-// return code and description fields are left unchanged.
+// with the specified string and returns the updated ReturnCode object. the
+// existing return code and description fields are left unchanged.
 func (c *ReturnCode) withInfo(info string) *ReturnCode {
 	c.info = info
 	return c
+}
+
+// function withInfof() is a wrapper for function withInfo() that constructs the
+// string using the specified printf-style format strings + arguments.
+func (c *ReturnCode) withInfof(format string, v ...interface{}) *ReturnCode {
+	s := fmt.Sprintf(format, v...)
+	return c.withInfo(s)
 }
 
 // function isError() determines if the return code value of a ReturnCode object

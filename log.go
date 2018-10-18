@@ -92,7 +92,9 @@ var consoleLog = [liCOUNT]*ConsoleLog{
 // single instantiation of each of the loggers for all goroutines to share
 // indirectly through use of the exported subroutines below.
 var (
-	isVerboseLog bool // flag used by loggers -only- for determining verbosity
+	// flags used by loggers -only- for determining verbosity
+	isVerboseLog bool
+	isTraceLog   bool
 
 	rawLog  *ConsoleLog = consoleLog[liRaw]
 	infoLog *ConsoleLog = consoleLog[liInfo]
@@ -146,20 +148,34 @@ func (l *ConsoleLog) logf(format string, v ...interface{}) {
 	l.output(s)
 }
 
-// function vlog() outputs a given string using the current properties of the
-// logger and each of the variable-number-of arguments. the string will only
-// be output if the verbose flag was set.
-func (l *ConsoleLog) vlog(v ...interface{}) {
-	if isVerboseLog {
+// function verbose() is a wrapper for function log() that will prevent the
+// data from being output unless the verbose or trace flags are set.
+func (l *ConsoleLog) verbose(v ...interface{}) {
+	if isVerboseLog || isTraceLog {
 		l.log(v...)
 	}
 }
 
-// function vlogf() outputs a given string using the current properties of the
-// logger and any specified printf-style format string + arguments. the string
-// will only be output if the verbose flag was set.
-func (l *ConsoleLog) vlogf(format string, v ...interface{}) {
-	if isVerboseLog {
+// function verbosef() is a wrapper for function logf() that will prevent the
+// data from being output unless the verbose or trace flags are set.
+func (l *ConsoleLog) verbosef(format string, v ...interface{}) {
+	if isVerboseLog || isTraceLog {
+		l.logf(format, v...)
+	}
+}
+
+// function trace() is a wrapper for function log() that will prevent the
+// data from being output unless the trace flag is set.
+func (l *ConsoleLog) trace(v ...interface{}) {
+	if isTraceLog {
+		l.log(v...)
+	}
+}
+
+// function tracef() is a wrapper for function logf() that will prevent the
+// data from being output unless the trace flag is set.
+func (l *ConsoleLog) tracef(format string, v ...interface{}) {
+	if isTraceLog {
 		l.logf(format, v...)
 	}
 }
@@ -181,7 +197,7 @@ func (l *ConsoleLog) die(c *ReturnCode, trace bool) {
 	if rcUsage != c {
 		s := fmt.Sprintf("%s", error(c))
 		l.output(s)
-		if trace && isVerboseLog {
+		if trace && isTraceLog {
 			l.logStackTrace()
 		}
 	}

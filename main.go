@@ -22,7 +22,7 @@ import (
 	"path/filepath"
 )
 
-// versioning information defined by compiler switches in Makefile
+// versioning information defined by compiler switches in Makefile.
 var (
 	identity  string
 	version   string
@@ -31,7 +31,7 @@ var (
 )
 
 // type Option struct can contain any possible individual option configuration
-// including its command line flag identifier and usage info
+// including its command line flag identifier and usage info..
 type Option struct {
 	name  string
 	usage string
@@ -42,12 +42,13 @@ type Option struct {
 	string
 }
 
-// type Options struct defines the collection of all command line options
+// type Options struct defines the collection of all command line options.
 type Options struct {
 	*flag.FlagSet
-	UsageHelp Option
-	Verbose   Option
-	LibData   Option
+	UsageHelp Option // shows usage synopsis
+	Verbose   Option // prints additional status information
+	Trace     Option // prints very detailed status information
+	LibData   Option // defines data directory path (where to store databases)
 }
 
 // function configDir() constructs the full path to the default directory
@@ -56,35 +57,39 @@ func configDir() string {
 	return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
 }
 
-// function main() is the program entry point, obviously
+// function main() is the program entry point, obviously.
 func main() {
 
-	// parse options and command line arguments
+	// parse options and command line arguments.
 	options, err := initOptions()
 	if nil != err {
 		errLog.die(err, false)
 	}
 
+	// configuration defined, begin preparing the runtime environment.
+	infoLog.log("initializing")
+
+	// create the file system that will store our configuration and databases.
+	// permanently on disk.
 	config := configDir()
 	if exists, _ := goutil.PathExists(config); !exists {
 		if err := os.MkdirAll(config, os.ModePerm); nil != err {
-			info := fmt.Sprintf("cannot create configuration directory: %q", config)
-			errLog.die(rcInvalidConfig.withInfo(info), false)
+			errLog.die(rcInvalidConfig.withInfof("cannot create configuration directory: %q", config), false)
 		}
-		infoLog.vlog(fmt.Sprintf("created configuration directory: %q", config))
+		infoLog.tracef("created configuration directory: %q", config)
 	}
 
 	// remaining arguments are considered paths to libraries; verify the paths
-	// before assuming valid ones exist for traversal
+	// before assuming valid ones exist for traversal.
 	library := initLibrary(options)
 	if 0 == len(library) {
 		errLog.die(rcInvalidLibrary.withInfo("no libraries found"), false)
 	}
 
-	// libraries ready, spool up the library scanners
+	// libraries ready, spool up the library scanners.
 	populateLibrary(options, library)
 
-	infoLog.log("ready")
+	infoLog.log("initialization complete")
 	for {
 	}
 
@@ -92,7 +97,7 @@ func main() {
 }
 
 // function initOptions() parses all command line arguments and prepares the
-// environment
+// environment.
 func initOptions() (options *Options, err *ReturnCode) {
 
 	// panic handler
@@ -101,25 +106,24 @@ func initOptions() (options *Options, err *ReturnCode) {
 			options = nil
 			if flag.ErrHelp == recovered {
 				// hide the flag.flagSet's default output status message,
-				// because we will print our own
+				// because we will print our own.
 				err = rcUsage
 				return
 			}
 			// at this point we encountered an actual error, capture it and show
-			// it with our error logger
-			info := fmt.Sprintf("%s", recovered)
-			// note this "err" is a named output paramater
-			err = rcInvalidArgs.withInfo(info)
+			// it with our error logger. (NOTE: this "err" is a named output
+			// paramater of function initOptions()).
+			err = rcInvalidArgs.withInfof("%s", recovered)
 		}
 	}()
 
 	dataDir := filepath.Join(configDir(), defaultDataDir)
 
-	// define the option properties that the command line parser shall recognize
+	// define the option properties that the command line parser recognizes.
 	options = &Options{
 		// PanicOnError gets trapped by the anon defer'd func() above. the
 		// recover()'d  value will be set to flag.ErrHelp, which we want to
-		// override or print with our error logger
+		// override by printing with our error logger.
 		FlagSet: flag.NewFlagSet(identity, flag.PanicOnError),
 		UsageHelp: Option{
 			name:  "help",
@@ -128,7 +132,12 @@ func initOptions() (options *Options, err *ReturnCode) {
 		},
 		Verbose: Option{
 			name:  "verbose",
-			usage: "display more detailed output",
+			usage: "display additional status information",
+			bool:  false,
+		},
+		Trace: Option{
+			name:  "trace",
+			usage: "display very detailed status information",
 			bool:  false,
 		},
 		LibData: Option{
@@ -138,16 +147,17 @@ func initOptions() (options *Options, err *ReturnCode) {
 		},
 	}
 
-	// register the command line options we want to handle
+	// register the command line options we want to handle.
 	options.BoolVar(&options.UsageHelp.bool, options.UsageHelp.name, options.UsageHelp.bool, options.UsageHelp.usage)
 	options.BoolVar(&options.Verbose.bool, options.Verbose.name, options.Verbose.bool, options.Verbose.usage)
+	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
-	// display our own
+	// display our own.
 	options.SetOutput(ioutil.Discard)
 
-	// the output provided with -help or when a option parse error occurred
+	// the output provided with -help or when a option parse error occurred.
 	options.Usage = func() {
 		rawLog.logf("%s v%s (%s) [%s]", identity, version, revision, buildtime)
 		rawLog.log()
@@ -156,39 +166,41 @@ func initOptions() (options *Options, err *ReturnCode) {
 		rawLog.log()
 	}
 
-	// yeaaaaaaah, now we do it
+	// yeaaaaaaah, now we do it!
 	options.Parse(os.Args[1:])
 
 	var parseError *ReturnCode
 
-	// update program state for global optons
+	// update program state for global optons.
 	if options.UsageHelp.bool {
 		options.Usage()
 		parseError = rcUsage
 	}
 
-	// update the loggers' verbosity setting
+	// update the loggers' verbosity settings.
 	isVerboseLog = options.Verbose.bool
+	isTraceLog = options.Trace.bool
 
 	return options, parseError
 }
 
 // function initLibrary() validates all library paths provided, returning a list
-// of the valid ones
+// of the valid ones.
 func initLibrary(options *Options) []*Library {
 
 	var library []*Library
 
 	// any remaining args were not handled by the options parser. they are then
-	// considered to be file paths of libraries to scan
+	// considered to be file paths of libraries to scan.
 	libArgs := options.Args()
 
-	// dispatch a single goroutine per library to verify each concurrently
+	// dispatch a single goroutine per library to verify each concurrently.
 	for _, libPath := range libArgs {
 		lib, err := newLibrary(libPath, options.LibData.string, depthUnlimited)
 		if nil != err {
 			errLog.die(err, true)
 		}
+		infoLog.verbosef("created library: %s", lib)
 		library = append(library, lib)
 	}
 
@@ -201,7 +213,7 @@ func initLibrary(options *Options) []*Library {
 func populateLibrary(options *Options, library []*Library) {
 
 	// dispatch a single goroutine for each library that will listen on various
-	// channels for content discovered by the concurrent scanners
+	// channels for content discovered by the concurrent scanners.
 	for _, lib := range library {
 		go watchLibrary(lib)
 	}
@@ -221,12 +233,32 @@ func populateLibrary(options *Options, library []*Library) {
 			//}
 		}(lib)
 
+		dirEnter := func(l *Library, p string, v ...interface{}) {
+			infoLog.tracef("entering: %#s", p)
+			l.newDirectory <- newSubdirDiscovery(p, nil)
+		}
+		dirExit := func(l *Library, p string, v ...interface{}) {
+			infoLog.tracef("exiting: %#s", p)
+		}
+		fileMedia := func(l *Library, p string, v ...interface{}) {
+			m := v[0].(*Media)
+			infoLog.tracef("discovered: %#s", m)
+			l.newMedia <- newMediaDiscovery(m, nil)
+		}
+		fileOther := func(l *Library, p string, v ...interface{}) {
+		}
+
 		// recursively walks a library's file system, notifying the library's
 		// signal channels whenever any sort of content is found.
 		go func(l *Library) {
-			err := l.scan()
+			err := l.scan(&ScanHandler{
+				dirEnter:  dirEnter,
+				dirExit:   dirExit,
+				fileMedia: fileMedia,
+				fileOther: fileOther,
+			})
 			if nil != err {
-				errLog.vlog(err)
+				errLog.verbose(err)
 			}
 		}(lib)
 	}
@@ -237,20 +269,22 @@ func populateLibrary(options *Options, library []*Library) {
 }
 
 // function watchLibrary() is the dispatched goroutine that listens for and
-// handles new media as they are discovered
+// handles new media as they are discovered.
 func watchLibrary(lib *Library) {
 	// continuously monitors a library's signal channels for new content, which
-	// creates or processes the content accordingly
+	// creates or processes the content accordingly.
 	for {
 		select {
-		// library scanner discovered a subdirectory
-		//case subdir := <-lib.newDirectory:
-		//	infoLog.vlogf("entering: %q", subdir)
-		case <-lib.newDirectory:
+		// library scanner entered a subdirectory.
+		//		case disco := <-lib.newDirectory:
+		//			subdir := disco.string
 
-		// library scanner discovered media
-		case media := <-lib.newMedia:
-			infoLog.vlogf("processed: %q", media)
+		// library scanner discovered media.
+		//		case disco := <-lib.newMedia:
+		//			media := *disco.Media
+
+		case <-lib.newDirectory:
+		case <-lib.newMedia:
 		}
 	}
 }

@@ -35,17 +35,17 @@ type Media struct {
 	releaseDate string // date media was produced/released
 }
 
-// type MediaAudio is a specialized type of media containing struct fields
+// type AudioMedia is a specialized type of media containing struct fields
 // relevant only to video.
-type MediaAudio struct {
+type AudioMedia struct {
 	*Media
 	album string // name of the album on which the track appears
 	track int    // numbered index of where track is located on album
 }
 
-// type MediaVideo is a specialized type of media containing struct fields
+// type VideoMedia is a specialized type of media containing struct fields
 // relevant only to audio.
-type MediaVideo struct {
+type VideoMedia struct {
 	*Media
 	knownSubtitles []string // absolute path to all associated subtitles
 	subtitles      string   // absolute path to selected subtitles

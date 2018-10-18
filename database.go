@@ -27,7 +27,7 @@ import (
 )
 
 // variable colName maps the MediaKind enum values to the string name of their
-// corresponding collection in the database
+// corresponding collection in the database.
 var (
 	colName = [mkCOUNT]string{
 		"Audio", // 0 = mkAudio
@@ -35,6 +35,9 @@ var (
 	}
 )
 
+// type Database represents an abstraction from the internal persistant storage
+// mechanism used for maintaining an index of all known libraries and their
+// respective media content.
 type Database struct {
 	absPath string // absolute path to database directory
 	libPath string // absolute path to library
@@ -56,19 +59,18 @@ func newDatabase(abs string, dat string) (*Database, *ReturnCode) {
 	// verify or create the database directory if it doesn't exist.
 	if exists, _ := goutil.PathExists(path); !exists {
 		if err := os.MkdirAll(path, os.ModePerm); nil != err {
-			info := fmt.Sprintf("newDatabase(%q, %q): os.MkdirAll(%q): %s", abs, dat, path, err)
-			return nil, rcInvalidDatabase.withInfo(info)
+			return nil, rcInvalidDatabase.withInfof("newDatabase(%q, %q): os.MkdirAll(%q): %s", abs, dat, path, err)
 		}
-		infoLog.vlog(fmt.Sprintf("created database: %q (%q)", sum, abs))
+		infoLog.tracef("created database: %q (%q)", sum, abs)
 	}
 
-	// open the database, creating it if it doesn't already exist
+	// open the database, creating it if it doesn't already exist.
 	store, err := db.OpenDB(path)
 	if nil != err {
-		info := fmt.Sprintf("newDatabase(%q, %q): db.OpenDB(%q): %s", abs, dat, path, err)
-		return nil, rcDatabaseError.withInfo(info)
+		return nil, rcDatabaseError.withInfof("newDatabase(%q, %q): db.OpenDB(%q): %s", abs, dat, path, err)
 	}
 
+	// initialize the new struct object.
 	dbase := &Database{
 		absPath: path,
 		libPath: abs,
@@ -77,10 +79,14 @@ func newDatabase(abs string, dat string) (*Database, *ReturnCode) {
 		store:   store,
 	}
 
+	// initialize the backing data store by creating the required collections;
+	// returns to the caller any error it may have encountered.
 	if ok, ret := dbase.initialize(); !ok {
 		return nil, ret
 	}
 
+	// no errors caused an early return, so return the new struct object and a
+	// nil ReturnCode to indicate success.
 	return dbase, nil
 }
 
@@ -96,8 +102,7 @@ func (d *Database) close() (bool, *ReturnCode) {
 
 	err := d.store.Close()
 	if nil != err {
-		info := fmt.Sprintf("close(%s): %s", d, err)
-		return false, rcDatabaseError.withInfo(info)
+		return false, rcDatabaseError.withInfof("close(%s): %s", d, err)
 	}
 	return true, nil
 }
@@ -107,13 +112,15 @@ func (d *Database) close() (bool, *ReturnCode) {
 // ReturnCode on failure.
 func (d *Database) initialize() (bool, *ReturnCode) {
 
+	// iterate over all required collection names
 	for _, name := range colName {
+		// verify it is available
 		if !d.store.ColExists(name) {
+			// otherwise, collection doesn't exist -- create it
 			if err := d.store.Create(name); nil != err {
-				info := fmt.Sprintf("initialize(): %s: Create(%q): %s", d, name, err)
-				return false, rcDatabaseError.withInfo(info)
+				return false, rcDatabaseError.withInfof("initialize(): %s: Create(%q): %s", d, name, err)
 			}
-			infoLog.vlog(fmt.Sprintf("created collection: %q (%s)", name, d.name))
+			infoLog.tracef("created database collection: %q (%s)", name, d.name)
 		}
 	}
 	return true, nil
