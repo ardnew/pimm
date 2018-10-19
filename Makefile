@@ -41,13 +41,14 @@ ldflags-dbg  = '$(ldflags-vers)'
 
 # -- janitorial / cleanup targets ----------------------------------------------
 
-.PHONY: clean clean-data
+.PHONY: clean clean-data clean-all
 
 clean:
 	rm -f "$(gopathsrc)/$(importpath)/$(project)"
 	rm -f "$(gopathbin)/$(project)"
-clean-data: clean
+clean-data:
 	rm -rf "$(configpath)"
+clean-all: clean-data clean
 
 # -- compilation targets -------------------------------------------------------
 
@@ -70,10 +71,10 @@ clean-build: clean build
 clean-build-dbg: clean build-dbg
 clean-install: clean install
 clean-install-dbg: clean install-dbg
-clean-data-build: clean-data build
-clean-data-build-dbg: clean-data build-dbg
-clean-data-install: clean-data install
-clean-data-install-dbg: clean-data install-dbg
+clean-data-build: clean-all build
+clean-data-build-dbg: clean-all build-dbg
+clean-data-install: clean-all install
+clean-data-install-dbg: clean-all install-dbg
 
 # -- test / evaluation targets -------------------------------------------------
 

@@ -175,6 +175,10 @@ var (
 // associated with that file name extension.
 func mediaKindOfFileExt(ext string) (MediaKind, string) {
 
+	// constant values in file extension tables are all lowercase. convert the
+	// search key to lowercase for case-insensitivity.
+	extLower := strings.ToLower(ext)
+
 	// iter: all supported kinds of media
 	for _, m := range []MediaExt{audioExt, videoExt} {
 		// iter: each entry in current media's file extension table
@@ -182,7 +186,7 @@ func mediaKindOfFileExt(ext string) (MediaKind, string) {
 			// iter: each file extension in current table entry
 			for _, e := range l {
 				// cond: wanted file extension matches current file extension
-				if e == strings.ToLower(ext) {
+				if e == extLower {
 					// return: current media kind, file type of extension
 					return m.kind, n
 				}

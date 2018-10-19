@@ -14,8 +14,6 @@
 package main
 
 import (
-	"ardnew.com/goutil"
-
 	"fmt"
 	"os"
 	"path"
@@ -33,10 +31,10 @@ type Library struct {
 	maxDepth   uint   // maximum traversal depth (unlimited: 0)
 
 	dataDir string    // directory containing all known library databases
-	db      *Database // database containing all known media in this library
+	data    *Database // database containing all known media in this library
 
-	newMedia     chan *MediaDiscovery  // media discovery
-	newDirectory chan *SubdirDiscovery // subdirectory discovery
+	newMedia     chan *Discovery // media discovery
+	newDirectory chan *Discovery // subdirectory discovery
 
 	scanTime chan time.Time // counting semaphore to limit number of concurrent scanners
 }
@@ -46,7 +44,7 @@ type Library struct {
 // function walk() when it encounters files and directories.
 type PathHandler func(*Library, string, ...interface{})
 type ScanHandler struct {
-	dirEnter, dirExit, fileMedia, fileOther PathHandler
+	dirEnter, dirExit, fileMedia, fileMediaAux, fileOther PathHandler
 }
 
 // type Discovery represents any sort of file entity discovered during a file
@@ -55,31 +53,11 @@ type ScanHandler struct {
 // moment in time in which it was discovered.
 type Discovery struct {
 	time time.Time
-	data interface{}
+	data []interface{}
 }
 
-// type MediaDiscovery represents specifically the discovery of a Media object.
-type MediaDiscovery struct {
-	Discovery
-	*Media
-}
-
-// function newMediaDiscovery() creates a new MediaDiscovery object with the
-// time field set to current time via time.Now().
-func newMediaDiscovery(m *Media, d interface{}) *MediaDiscovery {
-	return &MediaDiscovery{Discovery{time.Now(), d}, m}
-}
-
-// type SubdirDiscovery represents specifically the discovery of a subdirectory.
-type SubdirDiscovery struct {
-	Discovery
-	string
-}
-
-// function newSubdirDiscovery() creates a new SubdirDiscovery object with the
-// time field set to current time via time.Now().
-func newSubdirDiscovery(s string, d interface{}) *SubdirDiscovery {
-	return &SubdirDiscovery{Discovery{time.Now(), d}, s}
+func newDiscovery(d ...interface{}) *Discovery {
+	return &Discovery{time: time.Now(), data: d}
 }
 
 // unexported constants
@@ -92,39 +70,43 @@ const (
 // function newLibrary() creates and initializes a new Library ready to scan.
 // the library database is also created if one doesn't already exist, otherwise
 // it is opened for businesss.
-func newLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
+func newLibrary(lib, dat string, lim uint, curr []*Library) (*Library, *ReturnCode) {
 
 	// determine the user's current working dir -- from where they invoked us
 	dir, err := os.Getwd()
 	if nil != err {
-		return nil, rcInvalidLibrary.withInfof("newLibrary(%q, %q): %s", lib, dat, err)
+		return nil, rcInvalidLibrary.withInfof(
+			"newLibrary(%q, %q): %s", lib, dat, err)
 	}
 
 	// determine the absolute path to the directory tree containing media
 	abs, err := filepath.Abs(lib)
 	if nil != err {
-		return nil, rcInvalidLibrary.withInfof("newLibrary(%q, %q): %s", lib, dat, err)
+		return nil, rcInvalidLibrary.withInfof(
+			"newLibrary(%q, %q): %s", lib, dat, err)
+	}
+
+	// verify we haven't already seen this path in our library list
+	for _, p := range curr {
+		if p.absPath == abs {
+			return nil, rcDuplicateLibrary.withInfof(
+				"newLibrary(%q, %q): library already exists (skipping): %q", lib, dat, abs)
+		}
 	}
 
 	// open the root directory of the library file system for reading
 	fds, err := os.Open(abs)
 	if nil != err {
-		return nil, rcInvalidLibrary.withInfof("newLibrary(%q, %q): %s", lib, dat, err)
+		return nil, rcInvalidLibrary.withInfof(
+			"newLibrary(%q, %q): %s", lib, dat, err)
 	}
 	defer fds.Close()
 
 	// read all content of the root directory in the library file system
 	_, err = fds.Readdir(0)
 	if nil != err {
-		return nil, rcInvalidLibrary.withInfof("newLibrary(%q, %q): %s", lib, dat, err)
-	}
-
-	// verify or create the database storage location if it doesn't exist
-	if exists, _ := goutil.PathExists(dat); !exists {
-		if err := os.MkdirAll(dat, os.ModePerm); nil != err {
-			return nil, rcInvalidLibrary.withInfof("newLibrary(%q, %q): %s", lib, dat, err)
-		}
-		infoLog.tracef("created data directory: %q", dat)
+		return nil, rcInvalidLibrary.withInfof(
+			"newLibrary(%q, %q): %s", lib, dat, err)
 	}
 
 	// open or create the library database if it doesn't exist
@@ -141,11 +123,11 @@ func newLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
 
 		// path to the library database directory
 		dataDir: dat,
-		db:      dba,
+		data:    dba,
 
 		// channels for communicating scanner data to the main thread
-		newMedia:     make(chan *MediaDiscovery),
-		newDirectory: make(chan *SubdirDiscovery),
+		newMedia:     make(chan *Discovery),
+		newDirectory: make(chan *Discovery),
 		scanTime:     make(chan time.Time, maxLibraryScanners),
 	}, nil
 }
@@ -153,7 +135,11 @@ func newLibrary(lib, dat string, lim uint) (*Library, *ReturnCode) {
 // creates a string representation of the Library for easy identification in
 // logs.
 func (l *Library) String() string {
-	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.db)
+	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.data)
+}
+
+func (l *Library) Path() string {
+	return l.absPath
 }
 
 // function walk() is the recursive step for the file system traversal, invoked
@@ -165,14 +151,16 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 	// displaying diagnostic info to the user)
 	relPath, err := filepath.Rel(l.workingDir, absPath)
 	if nil != err {
-		return rcInvalidPath.withInfof("walk(%q, %d): filepath.Rel(%q): %s", absPath, depth, l.workingDir, err)
+		return rcInvalidPath.withInfof(
+			"walk(%q, %d): filepath.Rel(%q): %s", absPath, depth, l.workingDir, err)
 	}
 
 	// read fs attributes to determine how we handle the file
 	fileInfo, err := os.Lstat(absPath)
 	if nil != err {
 		// NOTE: we show relPath for readability, -should- be equivalent :^)
-		return rcInvalidStat.withInfof("walk(%q, %d): os.Lstat(): %s", relPath, depth, err)
+		return rcInvalidStat.withInfof(
+			"walk(%q, %d): os.Lstat(): %s", relPath, depth, err)
 	}
 	mode := fileInfo.Mode()
 
@@ -181,25 +169,27 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 	case (mode & os.ModeDir) > 0:
 		// file is directory, walk its contents unless we are at max depth
 		if depthUnlimited != l.maxDepth && depth > l.maxDepth {
-			return rcDirDepth.withInfof("walk(%q, %d): limit = %d", relPath, depth, l.maxDepth)
+			return rcDirDepth.withInfof(
+				"walk(%q, %d): limit = %d", relPath, depth, l.maxDepth)
 		}
 		dir, err := os.Open(absPath)
 		if nil != err {
-			return rcDirOpen.withInfof("walk(%q, %d): os.Open(): %s", relPath, depth, err)
+			return rcDirOpen.withInfof(
+				"walk(%q, %d): os.Open(): %s", relPath, depth, err)
 		}
 		contentInfo, err := dir.Readdir(0)
 		dir.Close()
 		if nil != err {
-			return rcDirOpen.withInfof("walk(%q, %d): dir.Readdir(): %s", relPath, depth, err)
+			return rcDirOpen.withInfof(
+				"walk(%q, %d): dir.Readdir(): %s", relPath, depth, err)
 		}
 
 		// don't add the library path itself to its list of subdirectories
 		if depth > 1 {
-			// but notify the consumer of a new subdirectory
+			// fire the on-enter-directory event handler
 			if nil != handler && nil != handler.dirEnter {
 				handler.dirEnter(l, absPath)
 			}
-			//l.newDirectory <- newSubdirDiscovery(absPath, nil)
 		}
 
 		// recursively walk all of this subdirectory's contents
@@ -210,6 +200,8 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 				warnLog.verbose(err)
 			}
 		}
+
+		// fire the on-exit-directory event handler
 		if nil != handler && nil != handler.dirExit {
 			handler.dirExit(l, absPath)
 		}
@@ -217,25 +209,44 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 
 	case (mode & os.ModeSymlink) > 0:
 		// symlinks currently unhandled
-		return rcInvalidFile.withInfof("walk(%q, %d): skipping, symlinks not supported!", relPath, depth)
+		return rcInvalidFile.withInfof(
+			"walk(%q, %d): symlinks not supported! (skipping)", relPath, depth)
 
 	case (mode & (os.ModeDevice | os.ModeNamedPipe | os.ModeSocket | os.ModeCharDevice)) > 0:
 		// file is not a regular file, not supported
-		return rcInvalidFile.withInfof("walk(%q, %d): skipping, not a regular file", relPath, depth)
+		return rcInvalidFile.withInfof(
+			"walk(%q, %d): not a regular file (skipping)", relPath, depth)
 	}
 
-	// if we made it here, we have a regular file. add it as a media candidate
-	// only if we were able to successfully os.Lstat() it
-	media, errCode := newMedia(l, absPath, relPath, fileInfo)
-	if nil != errCode {
-		return errCode
-	}
+	// if we made it here, we have a regular file. check if it is a Media file,
+	// one of its auxiliary/support files, or an undesirable piece of trash.
 
-	// finally, notify the consumer of our media discovery
-	if nil != handler && nil != handler.fileMedia {
-		handler.fileMedia(l, absPath, media)
+	if /* the file discovered is a media file */ true {
+
+		// create a Media struct object, and try analyzing the media content
+		media, errCode := newMedia(l, absPath, relPath, fileInfo)
+		if nil != errCode {
+			return errCode
+		}
+
+		// fire the event handler for new Media discovery
+		if nil != handler && nil != handler.fileMedia {
+			handler.fileMedia(l, absPath, media)
+		}
+
+	} else {
+		if /* the file is an auxiliary/support file */ false {
+			// we encountered a file that supports a Media file we already know
+			// about or one we haven't yet encountered. associate it with the
+			// Media struct object.
+			// ... TBD ...
+		} else {
+			// we encountered an undesirable piece of trash. handle it as such.
+			if nil != handler && nil != handler.fileOther {
+				handler.fileOther(l, absPath)
+			}
+		}
 	}
-	//l.newMedia <- newMediaDiscovery(media, nil)
 
 	return nil
 }
@@ -257,18 +268,25 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 	//     the return value when calling function scan()!
 	//
 
+	// try writing to the buffered channel. this will succeed if and only if it
+	// isn't already filled to capacity.
 	select {
 	case l.scanTime <- time.Now():
+		// the write succeeded, so we can initiate scanning. keep track of the
+		// time at which we began so that the time elapsed can be calculated and
+		// notified to the user.
 		infoLog.verbosef("scanning: %q", l.name)
 		err = l.walk(l.absPath, 1, handler)
 		elapsed := time.Since(<-l.scanTime)
-		infoLog.verbosef("finished scanning: %q (%s)", l.name, elapsed.Round(time.Millisecond))
+		infoLog.verbosef(
+			"finished scanning: %q (%s)", l.name, elapsed.Round(time.Millisecond))
 	default:
-		err = rcLibraryBusy.withInfof("scan(): max number of scanners reached: %q (max = %d)", l.absPath, maxLibraryScanners)
+		// if the write failed, we fall back to this default case. the only
+		// reason it should fail is if the buffer is already filled to capacity,
+		// meaning we already have the max allowed number of goroutines scanning
+		// this library's file system.
+		err = rcLibraryBusy.withInfof(
+			"scan(): max number of scanners reached: %q (max = %d)", l.absPath, maxLibraryScanners)
 	}
 	return err
-}
-
-func (l *Library) readAll() *ReturnCode {
-	return nil
 }

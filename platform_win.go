@@ -12,6 +12,11 @@
 //    unconditionally. the Go compiler takes care of identifying which of the
 //    symbols to export based on whichever platform we are targeting.
 //
+//    if you add anything to one of these platform-specific definitions files
+//    (platform_nix.go, platform_win.go) that is used by any of the client
+//    application (pimmp) code, then be sure to implement it in ~ALL~ of the
+//    platform-specific definitions files.
+//
 // =============================================================================
 
 package main

@@ -38,18 +38,19 @@ var (
 	rcUsage = newReturnCode(1, "usage", "") // no errors, displays usage help
 
 	// error return codes
-	rcInvalidArgs     = newReturnCode(errorOffset+0, "invalid arguments", "")           // invalid command line args
-	rcInvalidLibrary  = newReturnCode(errorOffset+1, "invalid library", "")             // invalid library
-	rcLibraryBusy     = newReturnCode(errorOffset+2, "library busy", "")                // library busy with other tasks
-	rcInvalidPath     = newReturnCode(errorOffset+3, "invalid path", "")                // invalid path
-	rcInvalidStat     = newReturnCode(errorOffset+4, "error reading file stat", "")     // file stat error
-	rcDirDepth        = newReturnCode(errorOffset+5, "search depth limit exceeded", "") // directory traversal depth limit exceeded
-	rcDirOpen         = newReturnCode(errorOffset+6, "cannot open directory", "")       // cannot open directory for reading
-	rcInvalidFile     = newReturnCode(errorOffset+7, "invalid file", "")                // some invalid type of file (symlink, FIFO, etc.)
-	rcInvalidConfig   = newReturnCode(errorOffset+8, "invalid configuration", "")       // invalid configuration settings
-	rcInvalidDatabase = newReturnCode(errorOffset+9, "invalid database", "")            // failed to create a media database
-	rcDatabaseError   = newReturnCode(errorOffset+10, "database operation failed", "")  // failed to perform an operation on the database
-	rcUnknown         = newReturnCode(maxReturnCode, "unknown error", "")               // unanticipated error encountered
+	rcInvalidArgs      = newReturnCode(errorOffset+0, "invalid arguments", "")           // invalid command line args
+	rcInvalidLibrary   = newReturnCode(errorOffset+1, "invalid library", "")             // invalid library
+	rcLibraryBusy      = newReturnCode(errorOffset+2, "library busy", "")                // library busy with other tasks
+	rcInvalidPath      = newReturnCode(errorOffset+3, "invalid path", "")                // invalid path
+	rcInvalidStat      = newReturnCode(errorOffset+4, "error reading file stat", "")     // file stat error
+	rcDirDepth         = newReturnCode(errorOffset+5, "search depth limit exceeded", "") // directory traversal depth limit exceeded
+	rcDirOpen          = newReturnCode(errorOffset+6, "cannot open directory", "")       // cannot open directory for reading
+	rcInvalidFile      = newReturnCode(errorOffset+7, "invalid file", "")                // some invalid type of file (symlink, FIFO, etc.)
+	rcInvalidConfig    = newReturnCode(errorOffset+8, "invalid configuration", "")       // invalid configuration settings
+	rcInvalidDatabase  = newReturnCode(errorOffset+9, "invalid database", "")            // failed to create a media database
+	rcDatabaseError    = newReturnCode(errorOffset+10, "database operation failed", "")  // failed to perform an operation on the database
+	rcDuplicateLibrary = newReturnCode(errorOffset+11, "duplicate library", "")          // duplicate; library path already being handled
+	rcUnknown          = newReturnCode(maxReturnCode, "unknown error", "")               // unanticipated error encountered
 )
 
 // function newReturnCode() constructs a new ReturnCode object with a specified

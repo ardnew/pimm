@@ -59,7 +59,8 @@ func newDatabase(abs string, dat string) (*Database, *ReturnCode) {
 	// verify or create the database directory if it doesn't exist.
 	if exists, _ := goutil.PathExists(path); !exists {
 		if err := os.MkdirAll(path, os.ModePerm); nil != err {
-			return nil, rcInvalidDatabase.withInfof("newDatabase(%q, %q): os.MkdirAll(%q): %s", abs, dat, path, err)
+			return nil, rcInvalidDatabase.withInfof(
+				"newDatabase(%q, %q): os.MkdirAll(%q): %s", abs, dat, path, err)
 		}
 		infoLog.tracef("created database: %q (%q)", sum, abs)
 	}
@@ -67,7 +68,8 @@ func newDatabase(abs string, dat string) (*Database, *ReturnCode) {
 	// open the database, creating it if it doesn't already exist.
 	store, err := db.OpenDB(path)
 	if nil != err {
-		return nil, rcDatabaseError.withInfof("newDatabase(%q, %q): db.OpenDB(%q): %s", abs, dat, path, err)
+		return nil, rcDatabaseError.withInfof(
+			"newDatabase(%q, %q): db.OpenDB(%q): %s", abs, dat, path, err)
 	}
 
 	// initialize the new struct object.
@@ -117,11 +119,21 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 		// verify it is available
 		if !d.store.ColExists(name) {
 			// otherwise, collection doesn't exist -- create it
+			infoLog.tracef("creating database collection: %q (%s)", name, d.name)
 			if err := d.store.Create(name); nil != err {
-				return false, rcDatabaseError.withInfof("initialize(): %s: Create(%q): %s", d, name, err)
+				return false, rcDatabaseError.withInfof(
+					"initialize(): %s: Create(%q): %s", d, name, err)
 			}
-			infoLog.tracef("created database collection: %q (%s)", name, d.name)
+			infoLog.tracef("finished creating database collection: %q (%s)", name, d.name)
 		}
 	}
 	return true, nil
+}
+
+func (d *Database) scrub() {
+	for _, name := range colName {
+		if d.store.ColExists(name) {
+			d.store.Scrub(name)
+		}
+	}
 }
