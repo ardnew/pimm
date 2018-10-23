@@ -22,6 +22,12 @@ import (
 	"path/filepath"
 )
 
+// unexported constants
+const (
+	defaultConfigPath  = "config"
+	defaultLibDataPath = "library.db"
+)
+
 // versioning information defined by compiler switches in Makefile.
 var (
 	identity  string
@@ -48,17 +54,26 @@ type Options struct {
 	UsageHelp Option // shows usage synopsis
 	Verbose   Option // prints additional status information
 	Trace     Option // prints very detailed status information
+	Config    Option // defines path to config file
 	LibData   Option // defines data directory path (where to store databases)
 }
 
-// function configDir() constructs the full path to the default directory
-// containing all of the program's supporting persistent data.
-func configDir() string {
-	return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
+// function configDir() constructs the full path to the directory containing all
+// of the program's supporting configuration data. if the user has defined a
+// specific config file (via -config arg), then use the _logical_ parent
+// directory of that file path; otherwise, use the default path "~/.<identity>".
+func configDir(o *Options) string {
+	if nil == o {
+		return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
+	} else {
+		return filepath.Dir(o.Config.string)
+	}
 }
 
 // function main() is the program entry point, obviously.
 func main() {
+
+	infoLog.verbose("parsing options ...")
 
 	// parse options and command line arguments.
 	options, err := initOptions()
@@ -66,30 +81,42 @@ func main() {
 		errLog.die(err, false)
 	}
 
-	// configuration defined, begin preparing the runtime environment.
-	infoLog.log("initializing library databases ...")
-
 	// create the directory hierarchy that will store our configuration data
 	// permanently on disk.
-	config := configDir()
-	if exists, _ := goutil.PathExists(config); !exists {
-		if err := os.MkdirAll(config, os.ModePerm); nil != err {
+	configDir := configDir(options)
+	config := options.Config.string
+	infoLog.tracef("verifying configuration directory: %q", configDir)
+	if exists, _ := goutil.PathExists(configDir); !exists {
+		if err := os.MkdirAll(configDir, os.ModePerm); nil != err {
 			errLog.die(rcInvalidConfig.withInfof(
-				"cannot create configuration directory: %q: %s", config, err), false)
+				"cannot create configuration directory: %q: %s", configDir, err), false)
 		}
-		infoLog.tracef("created configuration directory: %q", config)
+		warnLog.tracef("created configuration directory: %q", configDir)
+		warnLog.tracef("(TBD) -- creating configuration file: %q", config)
+	} else {
+		if exists, _ := goutil.PathExists(config); !exists {
+			warnLog.tracef("(TBD) -- creating configuration file: %q", config)
+		} else {
+			infoLog.tracef("(TBD) -- loading configuration file: %q", config)
+		}
 	}
 
 	// create the directory hierarchy that will store our libraries' backing
 	// data stores permanently on disk.
-	dbRoot := options.LibData.string
-	if exists, _ := goutil.PathExists(dbRoot); !exists {
-		if err := os.MkdirAll(dbRoot, os.ModePerm); nil != err {
+	libData := options.LibData.string
+	infoLog.tracef("verifying data directory: %q", libData)
+	if exists, _ := goutil.PathExists(libData); !exists {
+		if err := os.MkdirAll(libData, os.ModePerm); nil != err {
 			errLog.die(rcInvalidLibrary.withInfof(
-				"cannot create data directory: %q: %s", dbRoot, err), false)
+				"cannot create data directory: %q: %s", libData, err), false)
 		}
-		infoLog.tracef("created data directory: %q", dbRoot)
+		warnLog.tracef("created data directory: %q", libData)
+	} else {
+		infoLog.tracef("(TBD) -- loading data from data directory: %q", libData)
 	}
+
+	// runtime environment defined, begin preparing the libs and databases.
+	infoLog.log("initializing library databases ...")
 
 	// remaining arguments are considered paths to libraries; verify the paths
 	// before assuming valid ones exist for traversal.
@@ -97,11 +124,10 @@ func main() {
 	if 0 == len(library) {
 		errLog.die(rcInvalidLibrary.withInfo("no libraries found"), false)
 	}
+	infoLog.log("initialization complete")
 
 	// libraries ready, spool up the library scanners.
 	populateLibrary(options, library)
-
-	infoLog.log("initialization complete")
 
 	// keep process up and running
 	for {
@@ -131,7 +157,8 @@ func initOptions() (options *Options, err *ReturnCode) {
 		}
 	}()
 
-	dataDir := filepath.Join(configDir(), defaultDataDir)
+	configPath := filepath.Join(configDir(nil), defaultConfigPath)
+	libDataPath := filepath.Join(configDir(nil), defaultLibDataPath)
 
 	// define the option properties that the command line parser recognizes.
 	options = &Options{
@@ -146,18 +173,23 @@ func initOptions() (options *Options, err *ReturnCode) {
 		},
 		Verbose: Option{
 			name:  "verbose",
-			usage: "display additional status information",
+			usage: "display additional status information (verbosity level: 1)",
 			bool:  false,
 		},
 		Trace: Option{
 			name:  "trace",
-			usage: "display very detailed status information",
+			usage: "display very detailed status information (verbosity level: 2)",
 			bool:  false,
+		},
+		Config: Option{
+			name:   "config",
+			usage:  "path to config file",
+			string: configPath,
 		},
 		LibData: Option{
 			name:   "libdata",
-			usage:  "path used to store library databases",
-			string: dataDir,
+			usage:  "path to library databases directory",
+			string: libDataPath,
 		},
 	}
 
@@ -165,6 +197,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.BoolVar(&options.UsageHelp.bool, options.UsageHelp.name, options.UsageHelp.bool, options.UsageHelp.usage)
 	options.BoolVar(&options.Verbose.bool, options.Verbose.name, options.Verbose.bool, options.Verbose.usage)
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
+	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
@@ -211,7 +244,7 @@ func initLibrary(options *Options) []*Library {
 	// dispatch a single goroutine per library to verify each concurrently.
 	for _, libPath := range libArgs {
 		lib, err := newLibrary(
-			libPath, options.LibData.string, depthUnlimited, library)
+			options, libPath, depthUnlimited, library)
 
 		// if we encounter an error, check the return code to determine if it is
 		// fatal or not. special case logic is added for each non-fatal codes.
@@ -242,19 +275,19 @@ func populateLibrary(options *Options, library []*Library) {
 	scanHandler := &ScanHandler{
 
 		// the scanner entered a subdirectory of the library's file system.
-		dirEnter: func(l *Library, p string, v ...interface{}) {
+		handleEnter: func(l *Library, p string, v ...interface{}) {
 			infoLog.tracef("entering: %#s", p)
 			l.newDirectory <- newDiscovery(p, nil)
 		},
 
 		// the scanner exited a subdirectory of the library's file system.
-		dirExit: func(l *Library, p string, v ...interface{}) {
+		handleExit: func(l *Library, p string, v ...interface{}) {
 			infoLog.tracef("exiting: %#s", p)
 		},
 
 		// the scanner identified some file in a subdirectory of the library's
 		// file system as a media file.
-		fileMedia: func(l *Library, p string, v ...interface{}) {
+		handleMedia: func(l *Library, p string, v ...interface{}) {
 			m := v[0].(*Media)
 			infoLog.tracef("discovered: %#s", m)
 			l.newMedia <- newDiscovery(m, nil)
@@ -263,12 +296,12 @@ func populateLibrary(options *Options, library []*Library) {
 		// the scanner identified some file in a subdirectory of the library's
 		// file system as a supporting auxiliary file to a known or as-of-yet
 		// unknown media file.
-		fileMediaAux: func(l *Library, p string, v ...interface{}) {
+		handleAux: func(l *Library, p string, v ...interface{}) {
 		},
 
 		// the scanner identified some file in a subdirectory of the library's
 		// file system as an undesirable piece of trash.
-		fileOther: func(l *Library, p string, v ...interface{}) {
+		handleOther: func(l *Library, p string, v ...interface{}) {
 		},
 	}
 
@@ -315,14 +348,6 @@ func watchLibrary(lib *Library) {
 	// creates or processes the content accordingly.
 	for {
 		select {
-		// library scanner entered a subdirectory.
-		//		case disco := <-lib.newDirectory:
-		//			subdir := disco.string
-
-		// library scanner discovered media.
-		//		case disco := <-lib.newMedia:
-		//			media := *disco.Media
-
 		case <-lib.newDirectory:
 		case <-lib.newMedia:
 		}

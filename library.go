@@ -44,7 +44,7 @@ type Library struct {
 // function walk() when it encounters files and directories.
 type PathHandler func(*Library, string, ...interface{})
 type ScanHandler struct {
-	dirEnter, dirExit, fileMedia, fileMediaAux, fileOther PathHandler
+	handleEnter, handleExit, handleMedia, handleAux, handleOther PathHandler
 }
 
 // type Discovery represents any sort of file entity discovered during a file
@@ -62,7 +62,6 @@ func newDiscovery(d ...interface{}) *Discovery {
 
 // unexported constants
 const (
-	defaultDataDir     = "library.db"
 	depthUnlimited     = 0
 	maxLibraryScanners = 1
 )
@@ -70,27 +69,30 @@ const (
 // function newLibrary() creates and initializes a new Library ready to scan.
 // the library database is also created if one doesn't already exist, otherwise
 // it is opened for businesss.
-func newLibrary(lib, dat string, lim uint, curr []*Library) (*Library, *ReturnCode) {
+func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, *ReturnCode) {
+
+	// pull only the relevant info we need from the Options struct
+	dat := opt.LibData.string
 
 	// determine the user's current working dir -- from where they invoked us
 	dir, err := os.Getwd()
 	if nil != err {
 		return nil, rcInvalidLibrary.withInfof(
-			"newLibrary(%q, %q): %s", lib, dat, err)
+			"newLibrary({libdata:%q}, %q, %q): %s", dat, lib, err)
 	}
 
 	// determine the absolute path to the directory tree containing media
 	abs, err := filepath.Abs(lib)
 	if nil != err {
 		return nil, rcInvalidLibrary.withInfof(
-			"newLibrary(%q, %q): %s", lib, dat, err)
+			"newLibrary({libdata:%q}, %q, %q): %s", dat, lib, err)
 	}
 
 	// verify we haven't already seen this path in our library list
 	for _, p := range curr {
 		if p.absPath == abs {
 			return nil, rcDuplicateLibrary.withInfof(
-				"newLibrary(%q, %q): library already exists (skipping): %q", lib, dat, abs)
+				"newLibrary({libdata:%q}, %q, %q): library already exists (skipping): %q", dat, lib, abs)
 		}
 	}
 
@@ -98,7 +100,7 @@ func newLibrary(lib, dat string, lim uint, curr []*Library) (*Library, *ReturnCo
 	fds, err := os.Open(abs)
 	if nil != err {
 		return nil, rcInvalidLibrary.withInfof(
-			"newLibrary(%q, %q): %s", lib, dat, err)
+			"newLibrary({libdata:%q}, %q, %q): %s", dat, lib, err)
 	}
 	defer fds.Close()
 
@@ -106,7 +108,7 @@ func newLibrary(lib, dat string, lim uint, curr []*Library) (*Library, *ReturnCo
 	_, err = fds.Readdir(0)
 	if nil != err {
 		return nil, rcInvalidLibrary.withInfof(
-			"newLibrary(%q, %q): %s", lib, dat, err)
+			"newLibrary({libdata:%q}, %q, %q): %s", dat, lib, err)
 	}
 
 	// open or create the library database if it doesn't exist
@@ -145,7 +147,7 @@ func (l *Library) Path() string {
 // function walk() is the recursive step for the file system traversal, invoked
 // initially by function scan(). error codes generated in this routine will be
 // returned to the caller of walk() -and- the caller of scan().
-func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *ReturnCode {
+func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode {
 
 	// get a path to the file relative to the current working dir (useful for
 	// displaying diagnostic info to the user)
@@ -187,14 +189,14 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 		// don't add the library path itself to its list of subdirectories
 		if depth > 1 {
 			// fire the on-enter-directory event handler
-			if nil != handler && nil != handler.dirEnter {
-				handler.dirEnter(l, absPath)
+			if nil != sh && nil != sh.handleEnter {
+				sh.handleEnter(l, absPath)
 			}
 		}
 
 		// recursively walk all of this subdirectory's contents
 		for _, info := range contentInfo {
-			err := l.walk(path.Join(absPath, info.Name()), depth+1, handler)
+			err := l.walk(path.Join(absPath, info.Name()), depth+1, sh)
 			if nil != err {
 				// a file/subdir of the current directory threw an error
 				warnLog.verbose(err)
@@ -202,8 +204,8 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 		}
 
 		// fire the on-exit-directory event handler
-		if nil != handler && nil != handler.dirExit {
-			handler.dirExit(l, absPath)
+		if nil != sh && nil != sh.handleExit {
+			sh.handleExit(l, absPath)
 		}
 		return nil
 
@@ -230,8 +232,8 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 		}
 
 		// fire the event handler for new Media discovery
-		if nil != handler && nil != handler.fileMedia {
-			handler.fileMedia(l, absPath, media)
+		if nil != sh && nil != sh.handleMedia {
+			sh.handleMedia(l, absPath, media)
 		}
 
 	} else {
@@ -239,11 +241,14 @@ func (l *Library) walk(absPath string, depth uint, handler *ScanHandler) *Return
 			// we encountered a file that supports a Media file we already know
 			// about or one we haven't yet encountered. associate it with the
 			// Media struct object.
-			// ... TBD ...
+			if nil != sh && nil != sh.handleAux {
+				sh.handleAux(l, absPath)
+			}
+
 		} else {
 			// we encountered an undesirable piece of trash. handle it as such.
-			if nil != handler && nil != handler.fileOther {
-				handler.fileOther(l, absPath)
+			if nil != sh && nil != sh.handleOther {
+				sh.handleOther(l, absPath)
 			}
 		}
 	}

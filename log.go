@@ -35,8 +35,10 @@ type ConsoleLog struct {
 
 // unexported constants
 const (
-	logFlags     = log.Ldate | log.Ltime // flags defining format of log.Logger
-	logDelimiter = "| "                  // log detail fields delimiter
+	logFlags        = log.Ldate | log.Ltime // flags defining format of log.Logger
+	logDelimNormal  = "  "                  // log detail fields delimiter
+	logDelimVerbose = "+ "                  // ^ delimiter for verbose sessions
+	logDelimTrace   = "| "                  // ^ delimiter for trace sessions
 )
 
 // type LogID is an enum identifying the different kinds of built-in loggers.
@@ -119,18 +121,20 @@ func (l *ConsoleLog) setWriter(w io.Writer) {
 	}
 }
 
-// function output() outputs a given string using the current properties of the
-// target logger. this function is the final stop in the call stack for all of
-// the logging subroutines exported by this unit, so it is possible to modify or
-// simply toggle ON or OFF all of the output by changing this subroutine.
-func (l *ConsoleLog) output(s string) {
-	if false {
-		return
-	}
-	if l != rawLog {
-		l.Print(fmt.Sprintf("%s%s", logDelimiter, s))
-	} else {
-		l.Print(s)
+// function output() outputs a given string s, with an optional delimiter d,
+// using the current properties of the target logger. this function is the final
+// stop in the call stack for all of the logging subroutines exported by this
+// unit, so any global formatting should be performed here.
+func (l *ConsoleLog) output(d, s string) {
+	if true /* toggles printing globally */ {
+		if l != rawLog {
+			if d == "" {
+				d = logDelimNormal
+			}
+			l.Print(fmt.Sprintf("%s%s", d, s))
+		} else {
+			l.Print(s)
+		}
 	}
 }
 
@@ -138,21 +142,22 @@ func (l *ConsoleLog) output(s string) {
 // logger and each of the variable-number-of arguments.
 func (l *ConsoleLog) log(v ...interface{}) {
 	s := fmt.Sprint(v...)
-	l.output(s)
+	l.output(logDelimNormal, s)
 }
 
 // function logf() outputs a given string using the current properties of the
 // logger and any specified printf-style format string + arguments.
 func (l *ConsoleLog) logf(format string, v ...interface{}) {
 	s := fmt.Sprintf(format, v...)
-	l.output(s)
+	l.output(logDelimNormal, s)
 }
 
 // function verbose() is a wrapper for function log() that will prevent the
 // data from being output unless the verbose or trace flags are set.
 func (l *ConsoleLog) verbose(v ...interface{}) {
 	if isVerboseLog || isTraceLog {
-		l.log(v...)
+		s := fmt.Sprint(v...)
+		l.output(logDelimVerbose, s)
 	}
 }
 
@@ -160,7 +165,8 @@ func (l *ConsoleLog) verbose(v ...interface{}) {
 // data from being output unless the verbose or trace flags are set.
 func (l *ConsoleLog) verbosef(format string, v ...interface{}) {
 	if isVerboseLog || isTraceLog {
-		l.logf(format, v...)
+		s := fmt.Sprintf(format, v...)
+		l.output(logDelimVerbose, s)
 	}
 }
 
@@ -168,7 +174,8 @@ func (l *ConsoleLog) verbosef(format string, v ...interface{}) {
 // data from being output unless the trace flag is set.
 func (l *ConsoleLog) trace(v ...interface{}) {
 	if isTraceLog {
-		l.log(v...)
+		s := fmt.Sprint(v...)
+		l.output(logDelimTrace, s)
 	}
 }
 
@@ -176,7 +183,8 @@ func (l *ConsoleLog) trace(v ...interface{}) {
 // data from being output unless the trace flag is set.
 func (l *ConsoleLog) tracef(format string, v ...interface{}) {
 	if isTraceLog {
-		l.logf(format, v...)
+		s := fmt.Sprintf(format, v...)
+		l.output(logDelimTrace, s)
 	}
 }
 
@@ -196,7 +204,7 @@ func (l *ConsoleLog) logStackTrace() {
 func (l *ConsoleLog) die(c *ReturnCode, trace bool) {
 	if rcUsage != c {
 		s := fmt.Sprintf("%s", error(c))
-		l.output(s)
+		l.output("", s)
 		if trace && isTraceLog {
 			l.logStackTrace()
 		}
