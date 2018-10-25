@@ -112,7 +112,7 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 	}
 
 	// open or create the library database if it doesn't exist
-	dba, ret := newDatabase(abs, dat)
+	dba, ret := newDatabase(opt, abs, dat)
 	if nil != ret {
 		return nil, ret
 	}

@@ -50,6 +50,7 @@ var (
 	rcInvalidDatabase  = newReturnCode(errorOffset+9, "invalid database", "")            // failed to create a media database
 	rcDatabaseError    = newReturnCode(errorOffset+10, "database operation failed", "")  // failed to perform an operation on the database
 	rcDuplicateLibrary = newReturnCode(errorOffset+11, "duplicate library", "")          // duplicate; library path already being handled
+	rcInvalidJSONData  = newReturnCode(errorOffset+12, "invalid JSON data", "")          // cannot handle some JSON-related data object
 	rcUnknown          = newReturnCode(maxReturnCode, "unknown error", "")               // unanticipated error encountered
 )
 

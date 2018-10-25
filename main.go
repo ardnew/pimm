@@ -56,6 +56,12 @@ type Options struct {
 	Trace     Option // prints very detailed status information
 	Config    Option // defines path to config file
 	LibData   Option // defines data directory path (where to store databases)
+
+	DBRecMaxSize Option // TBD
+	DBBufferSize Option // TBD
+	DBBucketSize Option // TBD
+	DBHashGrowth Option // TBD
+	DBNumBuckets Option // TBD
 }
 
 // function configDir() constructs the full path to the directory containing all
@@ -191,6 +197,31 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage:  "path to library databases directory",
 			string: libDataPath,
 		},
+		DBRecMaxSize: Option{
+			name:  "dbrecmaxsize",
+			usage: "TBD",
+			int:   defaultDBRecMaxSize,
+		},
+		DBBufferSize: Option{
+			name:  "dbbuffersize",
+			usage: "TBD",
+			int:   defaultDBBufferSize,
+		},
+		DBBucketSize: Option{
+			name:  "dbbucketsize",
+			usage: "TBD",
+			int:   defaultDBBucketSize,
+		},
+		DBHashGrowth: Option{
+			name:  "dbhashgrowth",
+			usage: "TBD",
+			int:   defaultDBHashGrowth,
+		},
+		DBNumBuckets: Option{
+			name:  "dbnumbuckets",
+			usage: "TBD",
+			uint:  defaultDBNumBuckets,
+		},
 	}
 
 	// register the command line options we want to handle.
@@ -199,6 +230,11 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
 	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
+	options.IntVar(&options.DBRecMaxSize.int, options.DBRecMaxSize.name, options.DBRecMaxSize.int, options.DBRecMaxSize.usage)
+	options.IntVar(&options.DBBufferSize.int, options.DBBufferSize.name, options.DBBufferSize.int, options.DBBufferSize.usage)
+	options.IntVar(&options.DBBucketSize.int, options.DBBucketSize.name, options.DBBucketSize.int, options.DBBucketSize.usage)
+	options.IntVar(&options.DBHashGrowth.int, options.DBHashGrowth.name, options.DBHashGrowth.int, options.DBHashGrowth.usage)
+	options.UintVar(&options.DBNumBuckets.uint, options.DBNumBuckets.name, options.DBNumBuckets.uint, options.DBNumBuckets.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
 	// display our own.
