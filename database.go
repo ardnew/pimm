@@ -35,6 +35,49 @@ var (
 	}
 )
 
+// TBD: create tiedot cache/index JSON config file
+//import (
+//    "encoding/json"
+//    "fmt"
+//    "io/ioutil"
+//)
+//
+//type Rankings struct {
+//    Keyword  string
+//    GetCount uint32
+//    Engine   string
+//    Locale   string
+//    Mobile   bool
+//}
+//
+//func main() {
+//    var jsonBlob = []byte(`
+//        {"keyword":"hipaa compliance form", "get_count":157, "engine":"google", "locale":"en-us", "mobile":false}
+//    `)
+//    rankings := Rankings{}
+//    err := json.Unmarshal(jsonBlob, &rankings)
+//    if err != nil {
+//        // nozzle.printError("opening config file", err.Error())
+//    }
+//
+//    rankingsJson, _ := json.Marshal(rankings)
+//    err = ioutil.WriteFile("output.json", rankingsJson, 0644)
+//    fmt.Printf("%+v", rankings)
+//}
+
+// type JSONDataConfig defines all of tiedot's configurable paramters for
+// initial index amd cache sizes
+type JSONDataConfig struct {
+	docMaxRoom    int  // <=- maximum size of a single document that will ever be accepted into database.
+	colFileGrowth int  // <=- size (in bytes) to grow collection data file when new documents have to fit in.
+	perBucket     int  // number of entries pre-allocated to each hash table bucket.
+	htFileGrowth  int  // size (in bytes) to grow hash table file to fit in more entries.
+	hashBits      uint // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.
+
+	initialBuckets int    `json:"-"` // number of buckets initially allocated in a hash table file.
+	padding        string `json:"-"` // pre-allocated filler (space characters) for new documents.
+}
+
 // type Database represents an abstraction from the internal persistant storage
 // mechanism used for maintaining an index of all known libraries and their
 // respective media content.
