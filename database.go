@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,12 +33,16 @@ const (
 	dataConfigFileName  = "data-config.json"
 	dataConfigFilePerms = 0644
 
-	mebiBytes           = 1048576
-	defaultDBRecMaxSize = 2 * mebiBytes
-	defaultDBBufferSize = 32 * mebiBytes
+	kibiBytes = 1024
+	mebiBytes = 1048576
+
+	// see type JSONDataConfig for a description of these items
+	defaultDBRecMaxSize = 1 * mebiBytes
+	defaultDBBufferSize = 4 * defaultDBRecMaxSize
 	defaultDBBucketSize = 16
-	defaultDBHashGrowth = 32 * mebiBytes
-	defaultDBNumBuckets = 16
+	defaultDBHashGrowth = 4 * mebiBytes // 32 * mebiBytes
+	defaultDBHashedBits = 13            // 16
+	defaultDBNumBuckets = 8192          // 65536
 )
 
 // variable colName maps the MediaKind enum values to the string name of their
@@ -52,11 +57,12 @@ var (
 // type JSONDataConfig defines all of tiedot's configurable paramters for
 // initial index and cache sizes
 type JSONDataConfig struct {
-	DBRecMaxSize int  `json:"DocMaxRoom"`    // <=- maximum size of a single document that will ever be accepted into database.
-	DBBufferSize int  `json:"ColFileGrowth"` // <=- size (in bytes) of each collection's pre-allocated files.
-	DBBucketSize int  `json:"PerBucket"`     // number of entries pre-allocated to each hash table bucket.
-	DBHashGrowth int  `json:"HTFileGrowth"`  // size (in bytes) to grow hash table file to fit in more entries.
-	DBNumBuckets uint `json:"HashBits"`      // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.
+	DBRecMaxSize int  `json:"DocMaxRoom"`     // <=- maximum size of a single document that will ever be accepted into database.
+	DBBufferSize int  `json:"ColFileGrowth"`  // <=- size (in bytes) of each collection's pre-allocated files.
+	DBBucketSize int  `json:"PerBucket"`      // number of entries pre-allocated to each hash table bucket.
+	DBHashGrowth int  `json:"HTFileGrowth"`   // size (in bytes) to grow hash table file to fit in more entries.
+	DBHashedBits uint `json:"HashBits"`       // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.
+	DBNumBuckets int  `json:"InitialBuckets"` // number of buckets initially allocated in a hash table file.
 }
 
 // creates a string representation of the Database for easy identification in
@@ -75,12 +81,18 @@ func newJSONDataConfig(opt *Options) (*JSONDataConfig, *ReturnCode) {
 		return nil, rcInvalidJSONData.withInfo(
 			"newJSONDataConfig(): cannot encode JSON object: &Options{} is nil")
 	}
+
+	bits := uint(math.Log2(float64(opt.DBHashSize.int / 512)))
+	buckets := 1 << bits
+	bucketSize := defaultDBBucketSize
+
 	return &JSONDataConfig{
-		DBRecMaxSize: opt.DBRecMaxSize.int,
+		DBRecMaxSize: opt.DBMaxRecordSize.int,
 		DBBufferSize: opt.DBBufferSize.int,
-		DBBucketSize: opt.DBBucketSize.int,
-		DBHashGrowth: opt.DBHashGrowth.int,
-		DBNumBuckets: opt.DBNumBuckets.uint,
+		DBBucketSize: int(bucketSize),
+		DBHashGrowth: opt.DBHashSize.int,
+		DBHashedBits: uint(bits),
+		DBNumBuckets: int(buckets),
 	}, nil
 }
 
@@ -88,10 +100,9 @@ func newJSONDataConfig(opt *Options) (*JSONDataConfig, *ReturnCode) {
 // of being read from a file by the tiedot runtime.
 func (c *JSONDataConfig) marshal(indent bool) ([]byte, *ReturnCode) {
 
-	var (
-		js  []byte
-		err error
-	)
+	var js []byte
+	var err error
+
 	if indent {
 		js, err = json.MarshalIndent(c, "", "  ")
 	} else {
@@ -135,27 +146,39 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 		infoLog.tracef("created database: %q (%q)", sum, abs)
 	}
 
-	// configure tiedot's index/cache sizes from our Options struct
+	// configure tiedot's index/cache sizes from our Options struct.
 	jdc, ret := newJSONDataConfig(opt)
 	if nil != ret {
 		return nil, ret
 	}
 
-	// marshal the configuration struct into a json string for handing over to
-	// the tiedot runtime.
+	// marshal the configuration struct into a json string for writing into the
+	// config file read and used by the tiedot runtime.
 	js, ret := jdc.marshal(true)
 	if nil != ret {
 		return nil, ret
 	}
 
-	jdcPath := filepath.Join(path, dataConfigFileName)
-	if exists, _ := goutil.PathExists(jdcPath); !exists {
-		if err := ioutil.WriteFile(jdcPath, js, dataConfigFilePerms); nil != err {
+	jsPath := filepath.Join(path, dataConfigFileName)
+	replace, _ := goutil.PathExists(jsPath)
+
+	if replace {
+		if err := os.Remove(jsPath); nil != err {
 			return nil, rcInvalidDatabase.withInfof(
-				"newDatabase(%q, %q): ioutil.WriteFile(%q, %s, %d): %s",
-				abs, dat, jdcPath, js, dataConfigFilePerms, err)
+				"newDatabase(%q, %q): os.Remove(): %q: %s", abs, dat, jsPath, err)
 		}
-		infoLog.tracef("created database configuration file: %q", dataConfigFileName)
+	}
+
+	if err := ioutil.WriteFile(jsPath, js, dataConfigFilePerms); nil != err {
+		return nil, rcInvalidDatabase.withInfof(
+			"newDatabase(%q, %q): ioutil.WriteFile(%q, %s, %d): %s",
+			abs, dat, jsPath, js, dataConfigFilePerms, err)
+	}
+
+	if replace {
+		infoLog.verbosef("replaced database configuration: %q (%q)", dataConfigFileName, sum)
+	} else {
+		infoLog.verbosef("created database configuration: %q (%q)", dataConfigFileName, sum)
 	}
 
 	// open the database, creating it if it doesn't already exist.
@@ -166,7 +189,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 	}
 
 	// initialize the new struct object.
-	dbase := &Database{
+	base := &Database{
 		absPath: path,
 		libPath: abs,
 		name:    sum,
@@ -176,13 +199,13 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 
 	// initialize the backing data store by creating the required collections;
 	// returns to the caller any error it may have encountered.
-	if ok, ret := dbase.initialize(); !ok {
+	if ok, ret := base.initialize(); !ok {
 		return nil, ret
 	}
 
 	// no errors caused an early return, so return the new struct object and a
 	// nil ReturnCode to indicate success.
-	return dbase, nil
+	return base, nil
 }
 
 // creates a string representation of the Database for easy identification in
@@ -217,7 +240,7 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 				return false, rcDatabaseError.withInfof(
 					"initialize(): %s: Create(%q): %s", d, name, err)
 			}
-			infoLog.tracef("finished creating database collection: %q (%s)", name, d.name)
+			infoLog.tracef("created database collection: %q (%s)", name, d.name)
 		}
 	}
 	return true, nil

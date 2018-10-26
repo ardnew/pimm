@@ -57,22 +57,20 @@ type Options struct {
 	Config    Option // defines path to config file
 	LibData   Option // defines data directory path (where to store databases)
 
-	DBRecMaxSize Option // TBD
-	DBBufferSize Option // TBD
-	DBBucketSize Option // TBD
-	DBHashGrowth Option // TBD
-	DBNumBuckets Option // TBD
+	DBMaxRecordSize Option // TBD
+	DBBufferSize    Option // TBD
+	DBHashSize      Option // TBD
 }
 
 // function configDir() constructs the full path to the directory containing all
 // of the program's supporting configuration data. if the user has defined a
 // specific config file (via -config arg), then use the _logical_ parent
 // directory of that file path; otherwise, use the default path "~/.<identity>".
-func configDir(o *Options) string {
-	if nil == o {
+func configDir(opt *Options) string {
+	if nil == opt {
 		return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
 	} else {
-		return filepath.Dir(o.Config.string)
+		return filepath.Dir(opt.Config.string)
 	}
 }
 
@@ -91,34 +89,33 @@ func main() {
 	// permanently on disk.
 	configDir := configDir(options)
 	config := options.Config.string
-	infoLog.tracef("verifying configuration directory: %q", configDir)
-	if exists, _ := goutil.PathExists(configDir); !exists {
-		if err := os.MkdirAll(configDir, os.ModePerm); nil != err {
-			errLog.die(rcInvalidConfig.withInfof(
-				"cannot create configuration directory: %q: %s", configDir, err), false)
+	if exists, _ := goutil.PathExists(config); !exists {
+		if dirExists, _ := goutil.PathExists(configDir); !dirExists {
+			if err := os.MkdirAll(configDir, os.ModePerm); nil != err {
+				errLog.die(rcInvalidConfig.withInfof(
+					"cannot create configuration directory: %q: %s", configDir, err), false)
+			}
+			warnLog.tracef("created configuration directory: %q", configDir)
 		}
-		warnLog.tracef("created configuration directory: %q", configDir)
-		warnLog.tracef("(TBD) -- creating configuration file: %q", config)
-	} else {
-		if exists, _ := goutil.PathExists(config); !exists {
-			warnLog.tracef("(TBD) -- creating configuration file: %q", config)
-		} else {
-			infoLog.tracef("(TBD) -- loading configuration file: %q", config)
-		}
+
+		// TODO: create configuration file
+		warnLog.tracef("(TBD) -- created configuration: %q", config)
 	}
+
+	// if we haven't died yet, then config dir/file exists. load it.
+	infoLog.tracef("(TBD) -- loading configuration: %q", config)
 
 	// create the directory hierarchy that will store our libraries' backing
 	// data stores permanently on disk.
 	libData := options.LibData.string
-	infoLog.tracef("verifying data directory: %q", libData)
 	if exists, _ := goutil.PathExists(libData); !exists {
 		if err := os.MkdirAll(libData, os.ModePerm); nil != err {
 			errLog.die(rcInvalidLibrary.withInfof(
-				"cannot create data directory: %q: %s", libData, err), false)
+				"cannot create library data directory: %q: %s", libData, err), false)
 		}
-		warnLog.tracef("created data directory: %q", libData)
+		warnLog.tracef("created library data directory: %q", libData)
 	} else {
-		infoLog.tracef("(TBD) -- loading data from data directory: %q", libData)
+		infoLog.tracef("(TBD) -- loading data from library data directory: %q", libData)
 	}
 
 	// runtime environment defined, begin preparing the libs and databases.
@@ -179,12 +176,12 @@ func initOptions() (options *Options, err *ReturnCode) {
 		},
 		Verbose: Option{
 			name:  "verbose",
-			usage: "display additional status information (verbosity level: 1)",
+			usage: "display additional status information",
 			bool:  false,
 		},
 		Trace: Option{
 			name:  "trace",
-			usage: "display very detailed status information (verbosity level: 2)",
+			usage: "display additional status information (maximum verbosity)",
 			bool:  false,
 		},
 		Config: Option{
@@ -194,11 +191,11 @@ func initOptions() (options *Options, err *ReturnCode) {
 		},
 		LibData: Option{
 			name:   "libdata",
-			usage:  "path to library databases directory",
+			usage:  "path to library data directory (database storage location)",
 			string: libDataPath,
 		},
-		DBRecMaxSize: Option{
-			name:  "dbrecmaxsize",
+		DBMaxRecordSize: Option{
+			name:  "dbmaxrecordsize",
 			usage: "TBD",
 			int:   defaultDBRecMaxSize,
 		},
@@ -207,20 +204,10 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage: "TBD",
 			int:   defaultDBBufferSize,
 		},
-		DBBucketSize: Option{
-			name:  "dbbucketsize",
-			usage: "TBD",
-			int:   defaultDBBucketSize,
-		},
-		DBHashGrowth: Option{
-			name:  "dbhashgrowth",
+		DBHashSize: Option{
+			name:  "dbhashsize",
 			usage: "TBD",
 			int:   defaultDBHashGrowth,
-		},
-		DBNumBuckets: Option{
-			name:  "dbnumbuckets",
-			usage: "TBD",
-			uint:  defaultDBNumBuckets,
 		},
 	}
 
@@ -230,11 +217,9 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
 	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
-	options.IntVar(&options.DBRecMaxSize.int, options.DBRecMaxSize.name, options.DBRecMaxSize.int, options.DBRecMaxSize.usage)
+	options.IntVar(&options.DBMaxRecordSize.int, options.DBMaxRecordSize.name, options.DBMaxRecordSize.int, options.DBMaxRecordSize.usage)
 	options.IntVar(&options.DBBufferSize.int, options.DBBufferSize.name, options.DBBufferSize.int, options.DBBufferSize.usage)
-	options.IntVar(&options.DBBucketSize.int, options.DBBucketSize.name, options.DBBucketSize.int, options.DBBucketSize.usage)
-	options.IntVar(&options.DBHashGrowth.int, options.DBHashGrowth.name, options.DBHashGrowth.int, options.DBHashGrowth.usage)
-	options.UintVar(&options.DBNumBuckets.uint, options.DBNumBuckets.name, options.DBNumBuckets.uint, options.DBNumBuckets.usage)
+	options.IntVar(&options.DBHashSize.int, options.DBHashSize.name, options.DBHashSize.int, options.DBHashSize.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
 	// display our own.
