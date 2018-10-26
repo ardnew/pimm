@@ -57,12 +57,13 @@ var (
 // type JSONDataConfig defines all of tiedot's configurable paramters for
 // initial index and cache sizes
 type JSONDataConfig struct {
-	DBRecMaxSize int  `json:"DocMaxRoom"`     // <=- maximum size of a single document that will ever be accepted into database.
-	DBBufferSize int  `json:"ColFileGrowth"`  // <=- size (in bytes) of each collection's pre-allocated files.
-	DBBucketSize int  `json:"PerBucket"`      // number of entries pre-allocated to each hash table bucket.
-	DBHashGrowth int  `json:"HTFileGrowth"`   // size (in bytes) to grow hash table file to fit in more entries.
-	DBHashedBits uint `json:"HashBits"`       // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.
-	DBNumBuckets int  `json:"InitialBuckets"` // number of buckets initially allocated in a hash table file.
+	options      *Options `json:"-"`              // not stored in the json data
+	DBRecMaxSize int      `json:"DocMaxRoom"`     // <=- maximum size of a single document that will ever be accepted into database.
+	DBBufferSize int      `json:"ColFileGrowth"`  // <=- size (in bytes) of each collection's pre-allocated files.
+	DBBucketSize int      `json:"PerBucket"`      // number of entries pre-allocated to each hash table bucket.
+	DBHashGrowth int      `json:"HTFileGrowth"`   // size (in bytes) to grow hash table file to fit in more entries.
+	DBHashedBits uint     `json:"HashBits"`       // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.
+	DBNumBuckets int      `json:"InitialBuckets"` // number of buckets initially allocated in a hash table file.
 }
 
 // creates a string representation of the Database for easy identification in
@@ -87,6 +88,7 @@ func newJSONDataConfig(opt *Options) (*JSONDataConfig, *ReturnCode) {
 	bucketSize := defaultDBBucketSize
 
 	return &JSONDataConfig{
+		options:      opt,
 		DBRecMaxSize: opt.DBMaxRecordSize.int,
 		DBBufferSize: opt.DBBufferSize.int,
 		DBBucketSize: int(bucketSize),
@@ -109,11 +111,49 @@ func (c *JSONDataConfig) marshal(indent bool) ([]byte, *ReturnCode) {
 		js, err = json.Marshal(c)
 	}
 	if nil != err {
-		// TBD --
 		return nil, rcInvalidJSONData.withInfof(
 			"marshal(%s): cannot marshal struct into JSON object: %s", c, err)
 	}
 	return js, nil
+}
+
+// function unmarshal() unmarshals the tiedot-defined json configuration string
+// into a JSONDataConfig{} struct.
+func (c *JSONDataConfig) unmarshal(js []byte) *ReturnCode {
+
+	err := json.Unmarshal(js, c)
+	//warnLog.logf("------\nunmarshal():\n%#v\n%s", c, string(js))
+	if nil != err {
+		return rcInvalidJSONData.withInfof(
+			"unmarshal(%q): cannot unmarshal JSON object into struct: %s", string(js), err)
+	}
+	return nil
+}
+
+// function equals() performs a field-by-field logical comparison of two
+// JSONDataConfig{} structs returning true if and only if the fields are equal.
+// a slice of strings containing the corresponding command-line option names of
+// all unequal fields is returned. an empty slice is returned if all fields are
+// equal or the argument references point to the same object.
+func (c *JSONDataConfig) equals(jdc *JSONDataConfig) (bool, []string) {
+
+	uneq := []string{}
+
+	if c != jdc {
+		// these fields are the only options the user can specify on the command
+		// line. all other fields are calculated based on these.
+		if c.DBRecMaxSize != jdc.DBRecMaxSize {
+			uneq = append(uneq, c.options.DBMaxRecordSize.name)
+		}
+		if c.DBBufferSize != jdc.DBBufferSize {
+			uneq = append(uneq, c.options.DBBufferSize.name)
+		}
+		if c.DBHashGrowth != jdc.DBHashGrowth {
+			uneq = append(uneq, c.options.DBHashSize.name)
+		}
+	}
+	//warnLog.logf("------\nequals():\nNEW:%#v\nOLD:%#v\n--\nFIELDS:%v", c, jdc, uneq)
+	return 0 == len(uneq), uneq
 }
 
 // type Database represents an abstraction from the internal persistant storage
@@ -160,12 +200,21 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 	}
 
 	jsPath := filepath.Join(path, dataConfigFileName)
-	replace, _ := goutil.PathExists(jsPath)
+	exists, _ := goutil.PathExists(jsPath)
 
-	if replace {
-		if err := os.Remove(jsPath); nil != err {
+	if exists {
+		jdcPrev := &JSONDataConfig{}
+		jsPrev, err := ioutil.ReadFile(jsPath)
+		if nil != err {
 			return nil, rcInvalidDatabase.withInfof(
-				"newDatabase(%q, %q): os.Remove(): %q: %s", abs, dat, jsPath, err)
+				"newDatabase(%q, %q): ioutil.ReadFile(%q): %s",
+				abs, dat, jsPath, err)
+		}
+		if ret := jdcPrev.unmarshal(jsPrev); nil != ret {
+			return nil, ret
+		}
+		if equals, _ := jdc.equals(jdcPrev); !equals {
+			warnLog.log("database configuration defined in file does not match configuration requested via command-line.")
 		}
 	}
 
@@ -175,7 +224,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 			abs, dat, jsPath, js, dataConfigFilePerms, err)
 	}
 
-	if replace {
+	if exists {
 		infoLog.verbosef("replaced database configuration: %q (%q)", dataConfigFileName, sum)
 	} else {
 		infoLog.verbosef("created database configuration: %q (%q)", dataConfigFileName, sum)
