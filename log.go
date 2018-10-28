@@ -37,7 +37,7 @@ type ConsoleLog struct {
 const (
 	logFlags        = log.Ldate | log.Ltime // flags defining format of log.Logger
 	logDelimNormal  = "  "                  // log detail fields delimiter
-	logDelimVerbose = "+ "                  // ^ delimiter for verbose sessions
+	logDelimVerbose = "- "                  // ^ delimiter for verbose sessions
 	logDelimTrace   = "| "                  // ^ delimiter for trace sessions
 )
 

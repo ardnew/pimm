@@ -48,18 +48,50 @@ type Option struct {
 	string
 }
 
+// type NamedOption is intended to map the name of an option to the actual
+// *Option struct associated with it.
+type NamedOption map[string]*Option
+
 // type Options struct defines the collection of all command line options.
 type Options struct {
-	*flag.FlagSet
-	UsageHelp Option // shows usage synopsis
-	Verbose   Option // prints additional status information
-	Trace     Option // prints very detailed status information
-	Config    Option // defines path to config file
-	LibData   Option // defines data directory path (where to store databases)
+	*flag.FlagSet // the builtin command-line parser
 
-	DBMaxRecordSize Option // TBD
-	DBBufferSize    Option // TBD
-	DBHashSize      Option // TBD
+	Provided NamedOption // which options were provided by the user at runtime
+
+	UsageHelp *Option // shows usage synopsis
+	Verbose   *Option // prints additional status information
+	Trace     *Option // prints very detailed status information
+	Config    *Option // defines path to config file
+	LibData   *Option // defines data directory path (where to store databases)
+
+	DBMaxRecordSize *Option // TBD
+	DBBufferSize    *Option // TBD
+	DBHashSize      *Option // TBD
+}
+
+// function providedDBConfig() checks the "Provided" hash of the Options struct
+// for any of the options related to initial database configuration. this is
+// necessary to decide how to initialize the database. furthermore, a []string
+// will be returned containing the name of each option the user provided.
+func (o *Options) providedDBConfig() (bool, []string) {
+
+	list := []string{}
+	count := 0
+
+	if d, ok := o.Provided[o.DBMaxRecordSize.name]; ok {
+		list = append(list, d.name)
+		count++
+	}
+	if d, ok := o.Provided[o.DBBufferSize.name]; ok {
+		list = append(list, d.name)
+		count++
+	}
+	if d, ok := o.Provided[o.DBHashSize.name]; ok {
+		list = append(list, d.name)
+		count++
+	}
+
+	return 0 != count, list
 }
 
 // function configDir() constructs the full path to the directory containing all
@@ -95,11 +127,11 @@ func main() {
 				errLog.die(rcInvalidConfig.withInfof(
 					"cannot create configuration directory: %q: %s", configDir, err), false)
 			}
-			warnLog.tracef("created configuration directory: %q", configDir)
+			infoLog.tracef("created configuration directory: %q", configDir)
 		}
 
 		// TODO: create configuration file
-		warnLog.tracef("(TBD) -- created configuration: %q", config)
+		infoLog.tracef("(TBD) -- created configuration: %q", config)
 	}
 
 	// if we haven't died yet, then config dir/file exists. load it.
@@ -113,7 +145,7 @@ func main() {
 			errLog.die(rcInvalidLibrary.withInfof(
 				"cannot create library data directory: %q: %s", libData, err), false)
 		}
-		warnLog.tracef("created library data directory: %q", libData)
+		infoLog.tracef("created library data directory: %q", libData)
 	} else {
 		infoLog.tracef("(TBD) -- loading data from library data directory: %q", libData)
 	}
@@ -168,47 +200,59 @@ func initOptions() (options *Options, err *ReturnCode) {
 		// PanicOnError gets trapped by the anon defer'd func() above. the
 		// recover()'d  value will be set to flag.ErrHelp, which we want to
 		// override by printing with our error logger.
-		FlagSet: flag.NewFlagSet(identity, flag.PanicOnError),
-		UsageHelp: Option{
+		FlagSet:  flag.NewFlagSet(identity, flag.PanicOnError),
+		Provided: NamedOption{},
+		UsageHelp: &Option{
 			name:  "help",
 			usage: "display this helpful usage synopsis!",
 			bool:  false,
 		},
-		Verbose: Option{
+		Verbose: &Option{
 			name:  "verbose",
 			usage: "display additional status information",
 			bool:  false,
 		},
-		Trace: Option{
+		Trace: &Option{
 			name:  "trace",
 			usage: "display additional status information (maximum verbosity)",
 			bool:  false,
 		},
-		Config: Option{
+		Config: &Option{
 			name:   "config",
 			usage:  "path to config file",
 			string: configPath,
 		},
-		LibData: Option{
+		LibData: &Option{
 			name:   "libdata",
 			usage:  "path to library data directory (database storage location)",
 			string: libDataPath,
 		},
-		DBMaxRecordSize: Option{
+		DBMaxRecordSize: &Option{
 			name:  "dbmaxrecordsize",
 			usage: "TBD",
 			int:   defaultDBRecMaxSize,
 		},
-		DBBufferSize: Option{
+		DBBufferSize: &Option{
 			name:  "dbbuffersize",
 			usage: "TBD",
 			int:   defaultDBBufferSize,
 		},
-		DBHashSize: Option{
+		DBHashSize: &Option{
 			name:  "dbhashsize",
 			usage: "TBD",
 			int:   defaultDBHashGrowth,
 		},
+	}
+
+	knownOptions := NamedOption{
+		"help":            options.UsageHelp,
+		"verbose":         options.Verbose,
+		"trace":           options.Trace,
+		"config":          options.Config,
+		"libdata":         options.LibData,
+		"dbmaxrecordsize": options.DBMaxRecordSize,
+		"dbbuffersize":    options.DBBufferSize,
+		"dbhashsize":      options.DBHashSize,
 	}
 
 	// register the command line options we want to handle.
@@ -236,6 +280,8 @@ func initOptions() (options *Options, err *ReturnCode) {
 
 	// yeaaaaaaah, now we do it!
 	options.Parse(os.Args[1:])
+	options.Visit(
+		func(f *flag.Flag) { options.Provided[f.Name] = knownOptions[f.Name] })
 
 	var parseError *ReturnCode
 
