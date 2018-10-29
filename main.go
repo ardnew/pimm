@@ -124,7 +124,7 @@ func main() {
 	if exists, _ := goutil.PathExists(config); !exists {
 		if dirExists, _ := goutil.PathExists(configDir); !dirExists {
 			if err := os.MkdirAll(configDir, os.ModePerm); nil != err {
-				errLog.die(rcInvalidConfig.withInfof(
+				errLog.die(rcInvalidConfig.specf(
 					"cannot create configuration directory: %q: %s", configDir, err), false)
 			}
 			infoLog.tracef("created configuration directory: %q", configDir)
@@ -142,7 +142,7 @@ func main() {
 	libData := options.LibData.string
 	if exists, _ := goutil.PathExists(libData); !exists {
 		if err := os.MkdirAll(libData, os.ModePerm); nil != err {
-			errLog.die(rcInvalidLibrary.withInfof(
+			errLog.die(rcInvalidConfig.specf(
 				"cannot create library data directory: %q: %s", libData, err), false)
 		}
 		infoLog.tracef("created library data directory: %q", libData)
@@ -157,18 +157,18 @@ func main() {
 	// before assuming valid ones exist for traversal.
 	library := initLibrary(options)
 	if 0 == len(library) {
-		errLog.die(rcInvalidLibrary.withInfo("no libraries found"), false)
+		errLog.die(rcInvalidConfig.spec("no valid libraries provided"), false)
 	}
 	infoLog.log("initialization complete")
 
 	// libraries ready, spool up the library scanners.
 	populateLibrary(options, library)
 
-	// keep process up and running
-	for {
+	for _, l := range library {
+		<-l.scanComplete
 	}
 
-	infoLog.die(rcOK.withInfo("have a nice day!"), false)
+	infoLog.die(rcOK.spec("have a nice day!"), false)
 }
 
 // function initOptions() parses all command line arguments and prepares the
@@ -188,7 +188,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 			// at this point we encountered an actual error, capture it and show
 			// it with our error logger. (NOTE: this "err" is a named output
 			// paramater of function initOptions()).
-			err = rcInvalidArgs.withInfof("%s", recovered)
+			err = rcInvalidArgs.specf("%s", recovered)
 		}
 	}()
 
@@ -313,16 +313,13 @@ func initLibrary(options *Options) []*Library {
 		lib, err := newLibrary(
 			options, libPath, depthUnlimited, library)
 
-		// if we encounter an error, check the return code to determine if it is
-		// fatal or not. special case logic is added for each non-fatal codes.
-		// if no case logic exists, then it is assumed fatal by default.
+		// if we encounter an error, issue a warning, do NOT add it to the list
+		// of valid libraries, and continue. if it is truly a fatal error, then
+		// all user-provided libraries will fail for the same reason; the list
+		// of valid libraries will be empty on return, and the program will
+		// terminate with error "no libraries found".
 		if nil != err {
-			switch err.code {
-			case rcDuplicateLibrary.code:
-				warnLog.log(err)
-			default:
-				errLog.die(err, false)
-			}
+			warnLog.log(err)
 		} else {
 			// no error encountered, so the library is considered valid. add it
 			// to the queue.
@@ -339,64 +336,31 @@ func initLibrary(options *Options) []*Library {
 // media discovered (see function watchLibrary() for handlers).
 func populateLibrary(options *Options, library []*Library) {
 
-	scanHandler := &ScanHandler{
-
-		// the scanner entered a subdirectory of the library's file system.
-		handleEnter: func(l *Library, p string, v ...interface{}) {
-			infoLog.tracef("entering: %#s", p)
-			l.newDirectory <- newDiscovery(p, nil)
-		},
-
-		// the scanner exited a subdirectory of the library's file system.
-		handleExit: func(l *Library, p string, v ...interface{}) {
-			infoLog.tracef("exiting: %#s", p)
-		},
-
-		// the scanner identified some file in a subdirectory of the library's
-		// file system as a media file.
-		handleMedia: func(l *Library, p string, v ...interface{}) {
-			m := v[0].(*Media)
-			infoLog.tracef("discovered: %#s", m)
-			l.newMedia <- newDiscovery(m, nil)
-		},
-
-		// the scanner identified some file in a subdirectory of the library's
-		// file system as a supporting auxiliary file to a known or as-of-yet
-		// unknown media file.
-		handleAux: func(l *Library, p string, v ...interface{}) {
-		},
-
-		// the scanner identified some file in a subdirectory of the library's
-		// file system as an undesirable piece of trash.
-		handleOther: func(l *Library, p string, v ...interface{}) {
-		},
-	}
-
-	// dispatch a single goroutine for each library that will listen on various
-	// channels for content discovered by the concurrent scanners.
+	// for each library, dispatch a few (3) goroutines in the following order:
+	//   1. begin listening for content on the new-media and new-directory
+	//       discovery channels, and decide what to do with them;
+	//   2. dump all of the content from the library's database, verifying it
+	//       and notifying the discovery channels;
+	//   3. recursively traverse the library's filesystem, identifying which
+	//       content is valid and desirable, then notify the discovery channels
+	//       accordingly.
 	for _, lib := range library {
+
+		// 1. spool up the discovery channel polling, handling the content as
+		//   it is received -- the media is considered valid if it has reached
+		//   the channel.
 		go watchLibrary(lib)
-	}
 
-	// and now dispatch the concurrent scanners, two per library: one reading
-	// from the local database and one reading from the file system. as media or
-	// other types of content are discovered, they will be fed into the receiver
-	// goroutines dispatched above which will decide what to do with them.
-	for _, lib := range library {
+		// 2. pull all of the media already known to exist in the library from
+		//  the local database, verify it still exists, then notify the channel.
+		//go func(l *Library) {
+		//
+		//}(lib)
 
-		// pulls all of the media already known to exist in the library from the
-		// local database.
-		go func(l *Library) {
-			//err := l.Scan()
-			//if nil != err {
-			//	errLog.vlog(err)
-			//}
-		}(lib)
-
-		// recursively walks a library's file system, notifying the library's
+		// 3. recursively walks a library's file system, notifying the library's
 		// signal channels whenever any sort of content is found.
 		go func(l *Library) {
-			err := l.scan(scanHandler)
+			err := l.scan(defaultScanHandler /* defined in library.go */)
 			if nil != err {
 				errLog.verbose(err)
 			}
@@ -409,14 +373,30 @@ func populateLibrary(options *Options, library []*Library) {
 }
 
 // function watchLibrary() is the dispatched goroutine that listens for and
-// handles new media as they are discovered.
+// handles new media as they are discovered. the media has been validated before
+// it is written to the channel, so you can safely assume the media here exists
+// and is desirable.
 func watchLibrary(lib *Library) {
 	// continuously monitors a library's signal channels for new content, which
 	// creates or processes the content accordingly.
 	for {
 		select {
-		case <-lib.newDirectory:
-		case <-lib.newMedia:
+		case v := <-lib.newDirectory:
+			switch v.data[0].(type) {
+			case string:
+				d := v.data[0].(string)
+				infoLog.tracef("entered subdirectory: %s", d)
+			default:
+				warnLog.tracef("unknown object in directory channel: %t", v.data)
+			}
+		case v := <-lib.newMedia:
+			switch v.data[0].(type) {
+			case *Media:
+				m := v.data[0].(*Media)
+				infoLog.tracef("discovered media: %s", m)
+			default:
+				warnLog.tracef("unknown object in media channel: %t", v.data)
+			}
 		}
 	}
 }

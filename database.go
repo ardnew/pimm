@@ -79,7 +79,7 @@ func (c *JSONDataConfig) String() string {
 func newJSONDataConfig(opt *Options) (*JSONDataConfig, *ReturnCode) {
 
 	if nil == opt {
-		return nil, rcInvalidJSONData.withInfo(
+		return nil, rcInvalidJSONData.spec(
 			"newJSONDataConfig(): cannot encode JSON object: &Options{} is nil")
 	}
 
@@ -111,7 +111,7 @@ func (c *JSONDataConfig) marshal(indent bool) ([]byte, *ReturnCode) {
 		js, err = json.Marshal(c)
 	}
 	if nil != err {
-		return nil, rcInvalidJSONData.withInfof(
+		return nil, rcInvalidJSONData.specf(
 			"marshal(%s): cannot marshal struct into JSON object: %s", c, err)
 	}
 	return js, nil
@@ -122,7 +122,7 @@ func (c *JSONDataConfig) marshal(indent bool) ([]byte, *ReturnCode) {
 func (c *JSONDataConfig) unmarshal(js []byte) *ReturnCode {
 
 	if err := json.Unmarshal(js, c); nil != err {
-		return rcInvalidJSONData.withInfof(
+		return rcInvalidJSONData.specf(
 			"unmarshal(%q): cannot unmarshal JSON object into struct: %s",
 			string(js), err)
 	}
@@ -178,7 +178,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 	// verify or create the database directory if it doesn't exist.
 	if exists, _ := goutil.PathExists(path); !exists {
 		if err := os.MkdirAll(path, os.ModePerm); nil != err {
-			return nil, rcInvalidDatabase.withInfof(
+			return nil, rcInvalidDatabase.specf(
 				"newDatabase(%q, %q): os.MkdirAll(%q): %s", abs, dat, path, err)
 		}
 		infoLog.tracef("created database: %q (%q)", sum, abs)
@@ -213,7 +213,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 			jdcPrev := &JSONDataConfig{}
 			jsPrev, err := ioutil.ReadFile(jsPath)
 			if nil != err {
-				return nil, rcDatabaseError.withInfof(
+				return nil, rcDatabaseError.specf(
 					"newDatabase(%q, %q): ioutil.ReadFile(%q): %s",
 					abs, dat, jsPath, err)
 			}
@@ -242,7 +242,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 						"library to use a different database configuration. "+
 						"otherwise, please remove one or more of the "+
 						"following command-line options: %s", path, csv)
-				return nil, rcDatabaseError.withInfof(
+				return nil, rcDatabaseError.specf(
 					"cannot reconfigure the storage/performance parameters " +
 						"of an existing library database. one or more " +
 						"command-line options provided are not compatible " +
@@ -273,7 +273,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 		// the permanent configuration used by the database runtime from now on
 		// and cannot be changed.
 		if err := ioutil.WriteFile(jsPath, js, dataConfigFilePerms); nil != err {
-			return nil, rcDatabaseError.withInfof(
+			return nil, rcDatabaseError.specf(
 				"newDatabase(%q, %q): ioutil.WriteFile(%q, %s, %d): %s",
 				abs, dat, jsPath, js, dataConfigFilePerms, err)
 		}
@@ -294,7 +294,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 	// open the actual persistent data store if it exists; otherwise, create it.
 	store, err := db.OpenDB(path)
 	if nil != err {
-		return nil, rcDatabaseError.withInfof(
+		return nil, rcDatabaseError.specf(
 			"newDatabase(%q, %q): db.OpenDB(%q): %s", abs, dat, path, err)
 	}
 
@@ -330,7 +330,7 @@ func (d *Database) close() (bool, *ReturnCode) {
 
 	err := d.store.Close()
 	if nil != err {
-		return false, rcDatabaseError.withInfof("close(%s): %s", d, err)
+		return false, rcDatabaseError.specf("close(%s): %s", d, err)
 	}
 	return true, nil
 }
@@ -347,7 +347,7 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 			// otherwise, collection doesn't exist -- create it
 			infoLog.tracef("creating database collection: %q (%s)", name, d.name)
 			if err := d.store.Create(name); nil != err {
-				return false, rcDatabaseError.withInfof(
+				return false, rcDatabaseError.specf(
 					"initialize(): %s: Create(%q): %s", d, name, err)
 			}
 			infoLog.tracef("created database collection: %q (%s)", name, d.name)
