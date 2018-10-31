@@ -36,7 +36,7 @@ type Library struct {
 	newMedia     chan *Discovery // media discovery
 	newDirectory chan *Discovery // subdirectory discovery
 
-	scanComplete chan bool      //  synchronization lock
+	scanComplete chan bool      // synchronization lock
 	scanStart    chan time.Time // counting semaphore to limit number of concurrent scanners
 	scanElapsed  time.Duration  // measures time elapsed for scan to complete (use internally, not thread-safe!)
 }
@@ -260,26 +260,41 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 			"walk(%q, %d): not a regular file (skipping)", dispPath, depth)
 
 	default:
-		if /* the file discovered is a media file */ true {
-			// create a Media struct object, and try analyzing the media content.
-			media, errCode := newMedia(l, absPath, relPath, fileInfo)
-			if nil != errCode {
-				return errCode
-			}
-			// fire the event handler for new Media discovery.
+
+		// first extract the file name extension. this is how we determine file
+		// type; not very intelligible, but fast and mostly reliable for media
+		// files.
+		ext := path.Ext(absPath)
+
+		// check if it looks like a regular media file.
+		switch kind, extName := mediaKindOfFileExt(ext); kind {
+		case mkAudio:
 			if nil != sh && nil != sh.handleMedia {
+				media, errCode := newAudioMedia(l, absPath, relPath, ext, extName, fileInfo)
+				if nil != errCode {
+					return errCode
+				}
 				sh.handleMedia(l, absPath, media)
 			}
-		} else {
-			if /* the file is an auxiliary/support file */ false {
-				// we encountered a file that supports a Media file we already know
-				// about or one we haven't yet encountered. associate it with the
-				// Media struct object.
-				if nil != sh && nil != sh.handleAux {
-					sh.handleAux(l, absPath)
+		case mkVideo:
+			if nil != sh && nil != sh.handleMedia {
+				media, errCode := newVideoMedia(l, absPath, relPath, ext, extName, fileInfo)
+				if nil != errCode {
+					return errCode
 				}
-			} else {
-				// we encountered an undesirable piece of trash. handle it as such.
+				sh.handleMedia(l, absPath, media)
+			}
+		default:
+			// doesn't have an extension typically associated with media files.
+			// check if it is a media-supporting file.
+			switch kind, extName := mediaSupportKindOfFileExt(ext); kind {
+			case mskSubtitles:
+				if nil != sh && nil != sh.handleAux {
+					sh.handleAux(l, absPath, relPath, mskSubtitles, ext, extName, fileInfo)
+				}
+			default:
+				// cannot identify the file, probably an undesirable piece of
+				// trash. well-suited for being ignored.
 				if nil != sh && nil != sh.handleOther {
 					sh.handleOther(l, absPath)
 				}

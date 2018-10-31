@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // unexported constants
@@ -64,9 +65,8 @@ type Options struct {
 	Config    *Option // defines path to config file
 	LibData   *Option // defines data directory path (where to store databases)
 
-	DBMaxRecordSize *Option // TBD
-	DBBufferSize    *Option // TBD
-	DBHashSize      *Option // TBD
+	DBBufferSize *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
+	DBHashSize   *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
 }
 
 // function providedDBConfig() checks the "Provided" hash of the Options struct
@@ -78,10 +78,6 @@ func (o *Options) providedDBConfig() (bool, []string) {
 	list := []string{}
 	count := 0
 
-	if d, ok := o.Provided[o.DBMaxRecordSize.name]; ok {
-		list = append(list, d.name)
-		count++
-	}
 	if d, ok := o.Provided[o.DBBufferSize.name]; ok {
 		list = append(list, d.name)
 		count++
@@ -160,6 +156,8 @@ func main() {
 		errLog.die(rcInvalidConfig.spec("no valid libraries provided"), false)
 	}
 	infoLog.log("initialization complete")
+	infoLog.log("scanning libraries ...")
+	scanStart := time.Now()
 
 	// libraries ready, spool up the library scanners.
 	populateLibrary(options, library)
@@ -167,8 +165,10 @@ func main() {
 	for _, l := range library {
 		<-l.scanComplete
 	}
+	scanElapsed := time.Since(scanStart)
+	infoLog.logf("scan complete (%s)", scanElapsed.Round(time.Millisecond))
 
-	infoLog.die(rcOK.spec("have a nice day!"), false)
+	infoLog.die(rcOK.spec("have a nice day! or night!"), false)
 }
 
 // function initOptions() parses all command line arguments and prepares the
@@ -227,32 +227,27 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage:  "path to library data directory (database storage location)",
 			string: libDataPath,
 		},
-		DBMaxRecordSize: &Option{
-			name:  "dbmaxrecordsize",
-			usage: "TBD",
-			int:   defaultDBRecMaxSize,
-		},
 		DBBufferSize: &Option{
 			name:  "dbbuffersize",
-			usage: "TBD",
+			usage: "size (in bytes) of each library's preallocated on-disk buffers (number of buffers = number of CPU cores)\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
 			int:   defaultDBBufferSize,
 		},
 		DBHashSize: &Option{
 			name:  "dbhashsize",
-			usage: "TBD",
+			usage: "size (in bytes) by which each hash table will grow to make room once it reaches capacity\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
 			int:   defaultDBHashGrowth,
 		},
 	}
-
+	// DBBufferSize    *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
+	// DBHashSize      *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
 	knownOptions := NamedOption{
-		"help":            options.UsageHelp,
-		"verbose":         options.Verbose,
-		"trace":           options.Trace,
-		"config":          options.Config,
-		"libdata":         options.LibData,
-		"dbmaxrecordsize": options.DBMaxRecordSize,
-		"dbbuffersize":    options.DBBufferSize,
-		"dbhashsize":      options.DBHashSize,
+		"help":         options.UsageHelp,
+		"verbose":      options.Verbose,
+		"trace":        options.Trace,
+		"config":       options.Config,
+		"libdata":      options.LibData,
+		"dbbuffersize": options.DBBufferSize,
+		"dbhashsize":   options.DBHashSize,
 	}
 
 	// register the command line options we want to handle.
@@ -261,7 +256,6 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
 	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
-	options.IntVar(&options.DBMaxRecordSize.int, options.DBMaxRecordSize.name, options.DBMaxRecordSize.int, options.DBMaxRecordSize.usage)
 	options.IntVar(&options.DBBufferSize.int, options.DBBufferSize.name, options.DBBufferSize.int, options.DBBufferSize.usage)
 	options.IntVar(&options.DBHashSize.int, options.DBHashSize.name, options.DBHashSize.int, options.DBHashSize.usage)
 
@@ -391,8 +385,11 @@ func watchLibrary(lib *Library) {
 			}
 		case v := <-lib.newMedia:
 			switch v.data[0].(type) {
-			case *Media:
-				m := v.data[0].(*Media)
+			case *AudioMedia:
+				m := v.data[0].(*AudioMedia)
+				infoLog.tracef("discovered media: %s", m)
+			case *VideoMedia:
+				m := v.data[0].(*VideoMedia)
 				infoLog.tracef("discovered media: %s", m)
 			default:
 				warnLog.tracef("unknown object in media channel: %t", v.data)

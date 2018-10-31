@@ -50,6 +50,9 @@ clean-data:
 	rm -rf "$(configpath)"
 clean-all: clean-data clean
 
+sync-ripper:
+	rsync -rave ssh $(gopathsrc)/$(importpath)/ ardnew.com:$(shell ssh ripper 'echo $$GOPATH/src | sed -E "s|^$$HOME|~|"')/$(importpath)
+
 # -- compilation targets -------------------------------------------------------
 
 .PHONY: build build-dbg install install-dbg build-race build-dbg-race install-race install-dbg-race

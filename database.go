@@ -85,11 +85,12 @@ func newJSONDataConfig(opt *Options) (*JSONDataConfig, *ReturnCode) {
 
 	bits := uint(math.Log2(float64(opt.DBHashSize.int) / 512.0))
 	buckets := 1 << bits
+	recordSizeMax := defaultDBRecMaxSize
 	bucketSize := defaultDBBucketSize
 
 	return &JSONDataConfig{
 		options:      opt,
-		DBRecMaxSize: opt.DBMaxRecordSize.int,
+		DBRecMaxSize: int(recordSizeMax),
 		DBBufferSize: opt.DBBufferSize.int,
 		DBBucketSize: int(bucketSize),
 		DBHashGrowth: opt.DBHashSize.int,
@@ -141,9 +142,6 @@ func (c *JSONDataConfig) equals(jdc *JSONDataConfig) (bool, []string) {
 	if c != jdc {
 		// these fields are the only options the user can specify on the command
 		// line. all other fields are calculated based on these.
-		if c.DBRecMaxSize != jdc.DBRecMaxSize {
-			uneq = append(uneq, c.options.DBMaxRecordSize.name)
-		}
 		if c.DBBufferSize != jdc.DBBufferSize {
 			uneq = append(uneq, c.options.DBBufferSize.name)
 		}
@@ -163,7 +161,8 @@ type Database struct {
 	name    string // libPath checksum (name of database directory)
 	dataDir string // directory containing all known library databases
 
-	store *db.DB // interactive database object
+	store *db.DB             // interactive database object
+	col   map[string]*db.Col // db collections stored by name
 }
 
 // function newDatabase() creates a new high-level database object through
@@ -181,7 +180,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 			return nil, rcInvalidDatabase.specf(
 				"newDatabase(%q, %q): os.MkdirAll(%q): %s", abs, dat, path, err)
 		}
-		infoLog.tracef("created database: %q (%q)", sum, abs)
+		infoLog.verbosef("creating library database: %q (%s)", abs, sum)
 	}
 
 	// configure the database based on current Options struct -- this may be
@@ -281,11 +280,11 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 		// notify the user if the database configuration written to file came
 		// from the user's command-line options or the hard-coded defaults.
 		if userDefinedConfig {
-			infoLog.verbosef(
+			infoLog.tracef(
 				"created database configuration file with user-defined options: %q (%s)",
 				dataConfigFileName, sum)
 		} else {
-			infoLog.verbosef(
+			infoLog.tracef(
 				"created database configuration file with default options: %q (%s)",
 				dataConfigFileName, sum)
 		}
@@ -340,26 +339,33 @@ func (d *Database) close() (bool, *ReturnCode) {
 // ReturnCode on failure.
 func (d *Database) initialize() (bool, *ReturnCode) {
 
+	// allocate name-collection map
+	d.col = make(map[string]*db.Col, len(colName))
+
 	// iterate over all required collection names
 	for _, name := range colName {
 		// verify it is available
 		if !d.store.ColExists(name) {
 			// otherwise, collection doesn't exist -- create it
-			infoLog.tracef("creating database collection: %q (%s)", name, d.name)
 			if err := d.store.Create(name); nil != err {
 				return false, rcDatabaseError.specf(
 					"initialize(): %s: Create(%q): %s", d, name, err)
 			}
 			infoLog.tracef("created database collection: %q (%s)", name, d.name)
 		}
+		// keep a reference to the collection handler
+		d.col[name] = d.store.Use(name)
 	}
 	return true, nil
 }
 
+// function scrub() fixes corrupt records and defragments disk space used by the
+// database -- performed on all collections in the database.
 func (d *Database) scrub() {
 	for _, name := range colName {
 		if d.store.ColExists(name) {
 			d.store.Scrub(name)
 		}
+		d.col[name] = d.store.Use(name)
 	}
 }
