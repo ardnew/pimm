@@ -35,6 +35,7 @@ type Library struct {
 
 	newMedia     chan *Discovery // media discovery
 	newDirectory chan *Discovery // subdirectory discovery
+	newAuxiliary chan *Discovery // support file discovery
 
 	scanComplete chan bool      // synchronization lock
 	scanStart    chan time.Time // counting semaphore to limit number of concurrent scanners
@@ -94,6 +95,7 @@ func init() {
 		// file system as a supporting auxiliary file to a known or as-of-yet
 		// unknown media file.
 		handleAux: func(l *Library, p string, v ...interface{}) {
+			l.newAuxiliary <- newDiscovery(v...)
 		},
 		// the scanner identified some file in a subdirectory of the library's
 		// file system as an undesirable piece of trash.
@@ -166,6 +168,7 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		// channels for communicating scanner data to the main thread.
 		newMedia:     make(chan *Discovery),
 		newDirectory: make(chan *Discovery),
+		newAuxiliary: make(chan *Discovery),
 
 		scanComplete: make(chan bool),
 		scanStart:    make(chan time.Time, maxLibraryScanners),
@@ -290,7 +293,7 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 			switch kind, extName := mediaSupportKindOfFileExt(ext); kind {
 			case mskSubtitles:
 				if nil != sh && nil != sh.handleAux {
-					sh.handleAux(l, absPath, relPath, mskSubtitles, ext, extName, fileInfo)
+					sh.handleAux(l, absPath, mskSubtitles, ext, extName, fileInfo)
 				}
 			default:
 				// cannot identify the file, probably an undesirable piece of

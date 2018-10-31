@@ -394,6 +394,13 @@ func watchLibrary(lib *Library) {
 			default:
 				warnLog.tracef("unknown object in media channel: %t", v.data)
 			}
+		case v := <-lib.newAuxiliary:
+			switch v.data[0].(MediaSupportKind) {
+			case mskSubtitles:
+				//ext, extName, fileInfo
+			default:
+				warnLog.tracef("unknown object in auxiliary channel: %t", v.data)
+			}
 		}
 	}
 }
