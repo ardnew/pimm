@@ -50,8 +50,11 @@ clean-data:
 	rm -rf "$(configpath)"
 clean-all: clean-data clean
 
-sync-ripper:
+sync-ripper-push:
 	rsync -rave ssh $(gopathsrc)/$(importpath)/ ardnew.com:$(shell ssh ripper 'echo $$GOPATH/src | sed -E "s|^$$HOME|~|"')/$(importpath)
+
+sync-ripper-pull:
+	rsync -rave ssh ardnew.com:$(shell ssh ripper 'echo $$GOPATH/src | sed -E "s|^$$HOME|~|"')/$(importpath)/ $(gopathsrc)/$(importpath)
 
 # -- compilation targets -------------------------------------------------------
 

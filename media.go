@@ -52,8 +52,16 @@ type AudioMedia struct {
 // relevant only to audio.
 type VideoMedia struct {
 	*Media
-	knownSubtitles []string // absolute path to all associated subtitles
-	subtitles      string   // absolute path to selected subtitles
+	knownSubtitles []Subtitles // absolute path to all associated subtitles
+	subtitles      Subtitles   // absolute path to selected subtitles
+}
+
+type Subtitles struct {
+	absPath string
+	relPath string
+	info    os.FileInfo
+	ext     string
+	extName string
 }
 
 // type MediaRecord represents the struct stored in the database for an
@@ -146,10 +154,14 @@ func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 	}
 
 	return &VideoMedia{
-		Media:          media,      // common media info
-		knownSubtitles: []string{}, // absolute path to all associated subtitles
-		subtitles:      "",         // absolute path to selected subtitles
+		Media:          media,         // common media info
+		knownSubtitles: []Subtitles{}, // absolute path to all associated subtitles
+		subtitles:      Subtitles{},   // absolute path to selected subtitles
 	}, nil
+}
+
+func newSubtitles(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *Subtitles {
+	return &Subtitles{}
 }
 
 // type ExtTable is a mapping of the name of file types to their common file
@@ -310,7 +322,6 @@ var (
 			"VobSub":                     []string{".sub", ".idx"},
 			"SVCD":                       []string{".svcd"},
 			"MPEG-4 Timed Text":          []string{".ttxt"},
-			"VPlayer":                    []string{".txt"},
 			"Universal Subtitle Format":  []string{".usf"},
 		},
 	}
@@ -469,9 +480,9 @@ func (m *VideoMedia) fromRecord(r MediaRecord) {
 		m.releaseDate, ok = r["releaseDate"].(time.Time)
 	}
 	if ok {
-		m.knownSubtitles, ok = r["knownSubtitles"].([]string)
+		m.knownSubtitles, ok = r["knownSubtitles"].([]Subtitles)
 	}
 	if ok {
-		m.subtitles, ok = r["subtitles"].(string)
+		m.subtitles, ok = r["subtitles"].(Subtitles)
 	}
 }

@@ -345,7 +345,8 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 	// iterate over all required collection names
 	for _, name := range colName {
 		// verify it is available
-		if !d.store.ColExists(name) {
+		existed := d.store.ColExists(name)
+		if !existed {
 			// otherwise, collection doesn't exist -- create it
 			if err := d.store.Create(name); nil != err {
 				return false, rcDatabaseError.specf(
@@ -353,8 +354,16 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 			}
 			infoLog.tracef("created database collection: %q (%s)", name, d.name)
 		}
+
 		// keep a reference to the collection handler
 		d.col[name] = d.store.Use(name)
+
+		if !existed {
+			if err := d.col[name].Index([]string{"absPath"}); nil != err {
+				return false, rcDatabaseError.specf(
+					"initialize(): %s: Index(%q): %s", d, name, err)
+			}
+		}
 	}
 	return true, nil
 }
@@ -366,6 +375,8 @@ func (d *Database) scrub() {
 		if d.store.ColExists(name) {
 			d.store.Scrub(name)
 		}
+		// after Scrub(), tiedot has potentially reallocated space elsewhere and
+		// the reference is probably no longer valid.
 		d.col[name] = d.store.Use(name)
 	}
 }

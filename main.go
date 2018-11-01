@@ -18,6 +18,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"time"
@@ -35,6 +36,11 @@ var (
 	version   string
 	revision  string
 	buildtime string
+
+	// synonyms for "good"
+	adjGood = [...]string{"an acceptable", "a bad", "an excellent", "an exceptional", "a favorable", "a great", "a marvelous", "a positive", "a satisfactory", "a satisfying", "a superb", "a valuable", "a wonderful", "an ace", "a boss", "a bully", "a capital", "a choice", "a crack", "a nice", "a pleasing", "a prime", "a rad", "a sound", "a spanking", "a sterling", "a super", "a superior", "a welcome", "a worthy", "an admirable", "an agreeable", "a commendable", "a congenial", "a deluxe", "a first-class", "a first-rate", "a gnarly", "a gratifying", "a honorable", "a neat", "a precious", "a recherché", "a reputable", "a select", "a shipshape", "a splendid", "a stupendous", "a super-eminent", "a super-excellent", "a tip-top", "an up to snuff"}
+	// synonyms for "bad"
+	adjBad = [...]string{"a an atrocious", "an awful", "a cheap", "a crummy", "a dreadful", "a lousy", "a poor", "a rough", "a sad", "an unacceptable", "a blah", "a bummer", "a diddly", "a downer", "a garbage", "a gross", "an imperfect", "an inferior", "a junky", "a synthetic", "an abominable", "an amiss", "a bad news", "a beastly", "a bottom out", "a careless", "a cheesy", "a crappy", "a cruddy", "a defective", "a deficient", "a dissatisfactory", "an erroneous", "a fallacious", "a faulty", "a godawful", "a grody", "a grungy", "an icky", "an inadequate", "an incorrect", "a not good", "an off", "a raunchy", "a slipshod", "a stinking", "a substandard", "a the pits", "an unsatisfactory"}
 )
 
 // type Option struct can contain any possible individual option configuration
@@ -47,6 +53,20 @@ type Option struct {
 	uint
 	float64
 	string
+}
+
+// type TimeInterval struct contains a start and end time (together with a
+// contains() function) as well as a description string.
+type TimeInterval struct {
+	start time.Time
+	stop  time.Time
+	desc  string
+}
+
+// function contains() verifies the given time is in the TimeInterval half-open
+// range, i.e. time is in interval [start, end).
+func (i *TimeInterval) contains(t time.Time) bool {
+	return (t.After(i.start) || t.Equal(i.start)) && t.Before(i.stop)
 }
 
 // type NamedOption is intended to map the name of an option to the actual
@@ -156,6 +176,9 @@ func main() {
 		errLog.die(rcInvalidConfig.spec("no valid libraries provided"), false)
 	}
 	infoLog.log("initialization complete")
+
+	// -------------------------------------------------------------------------
+
 	infoLog.log("scanning libraries ...")
 	scanStart := time.Now()
 
@@ -168,7 +191,54 @@ func main() {
 	scanElapsed := time.Since(scanStart)
 	infoLog.logf("scan complete (%s)", scanElapsed.Round(time.Millisecond))
 
-	infoLog.die(rcOK.spec("have a nice day! or night!"), false)
+	// -------------------------------------------------------------------------
+
+	// for _, l := range library {
+	// 	c := l.db.col[colName[mkVideo]]
+	// 	c.ForEachDoc(
+	// 		func(id int, data []byte) (willMoveOn bool) {
+	// 			infoLog.logf("doc = %d, content = %s", id, string(data))
+	// 			return true // move on to the next document OR
+	// 		})
+	// }
+
+	// -------------------------------------------------------------------------
+
+	greeting := func() string {
+
+		n := time.Now()
+		d := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location())
+		rand.Seed(n.UnixNano())
+		var s, t string
+		if (n.Second() & 1) == 1 {
+			s = adjGood[rand.Intn(len(adjGood))]
+		} else {
+			s = adjBad[rand.Intn(len(adjBad))]
+		}
+
+		ne := &TimeInterval{d.Add(time.Hour * 00), d.Add(time.Hour * 05), "night"}     // 12AM-04:59:59AM
+		mo := &TimeInterval{d.Add(time.Hour * 05), d.Add(time.Hour * 12), "morning"}   // 05AM-11:59:59AM
+		af := &TimeInterval{d.Add(time.Hour * 12), d.Add(time.Hour * 17), "afternoon"} // 12PM-04:59:59PM
+		ev := &TimeInterval{d.Add(time.Hour * 17), d.Add(time.Hour * 22), "evening"}   // 05PM-09:59:59PM
+		nl := &TimeInterval{d.Add(time.Hour * 22), d.Add(time.Hour * 24), "night"}     // 10PM-11:59:59PM
+
+		if ne.contains(n) || nl.contains(n) {
+			t = ne.desc
+		}
+		if mo.contains(n) {
+			t = mo.desc
+		}
+		if af.contains(n) {
+			t = af.desc
+		}
+		if ev.contains(n) {
+			t = ev.desc
+		}
+
+		return fmt.Sprintf("have %s %s!", s, t)
+	}
+
+	infoLog.die(rcOK.spec(greeting()), false)
 }
 
 // function initOptions() parses all command line arguments and prepares the
@@ -347,16 +417,46 @@ func populateLibrary(options *Options, library []*Library) {
 
 		// 2. pull all of the media already known to exist in the library from
 		//  the local database, verify it still exists, then notify the channel.
-		//go func(l *Library) {
-		//
-		//}(lib)
+		go func(l *Library) {
+			loadErr := l.load()
+			if nil != loadErr {
+				errLog.verbose(loadErr)
+			}
+		}(lib)
 
 		// 3. recursively walks a library's file system, notifying the library's
 		// signal channels whenever any sort of content is found.
 		go func(l *Library) {
-			err := l.scan(defaultScanHandler /* defined in library.go */)
-			if nil != err {
-				errLog.verbose(err)
+			<-l.loadComplete
+			scanErr := l.scan(
+				&ScanHandler{
+					// the scanner entered a subdirectory of the library's file
+					// system.
+					handleEnter: func(l *Library, p string, v ...interface{}) {
+						l.newDirectory <- newDiscovery(p)
+					},
+					// the scanner exited a subdirectory of the library's file
+					// system.
+					handleExit: func(l *Library, p string, v ...interface{}) {
+					},
+					// the scanner identified some file in a subdirectory of the
+					// library's file system as a media file.
+					handleMedia: func(l *Library, p string, v ...interface{}) {
+						l.newMedia <- newDiscovery(v...)
+					},
+					// the scanner identified some file in a subdirectory of the
+					// library's file system as a supporting auxiliary file to a
+					// known or as-of-yet unknown media file.
+					handleAux: func(l *Library, p string, v ...interface{}) {
+						l.newAuxiliary <- newDiscovery(v...)
+					},
+					// the scanner identified some file in a subdirectory of the
+					// library's file system as an undesirable piece of trash.
+					handleOther: func(l *Library, p string, v ...interface{}) {
+					},
+				})
+			if nil != scanErr {
+				errLog.verbose(scanErr)
 			}
 		}(lib)
 	}
@@ -374,33 +474,14 @@ func watchLibrary(lib *Library) {
 	// continuously monitors a library's signal channels for new content, which
 	// creates or processes the content accordingly.
 	for {
+		// TODO: relay the discovery to anyone that needs to know. the library
+		//       has already finished with whatever it was doing, so the data
+		//       should be fully initialized and ready to be handled.
 		select {
-		case v := <-lib.newDirectory:
-			switch v.data[0].(type) {
-			case string:
-				d := v.data[0].(string)
-				infoLog.tracef("entered subdirectory: %s", d)
-			default:
-				warnLog.tracef("unknown object in directory channel: %t", v.data)
-			}
-		case v := <-lib.newMedia:
-			switch v.data[0].(type) {
-			case *AudioMedia:
-				m := v.data[0].(*AudioMedia)
-				infoLog.tracef("discovered media: %s", m)
-			case *VideoMedia:
-				m := v.data[0].(*VideoMedia)
-				infoLog.tracef("discovered media: %s", m)
-			default:
-				warnLog.tracef("unknown object in media channel: %t", v.data)
-			}
-		case v := <-lib.newAuxiliary:
-			switch v.data[0].(MediaSupportKind) {
-			case mskSubtitles:
-				//ext, extName, fileInfo
-			default:
-				warnLog.tracef("unknown object in auxiliary channel: %t", v.data)
-			}
+		case /* v := */ <-lib.newDirectory:
+		case /* v := */ <-lib.newMedia:
+		case /* v := */ <-lib.newAuxiliary:
+		default:
 		}
 	}
 }

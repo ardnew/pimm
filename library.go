@@ -14,6 +14,9 @@
 package main
 
 import (
+	"github.com/HouzuoGuo/tiedot/db"
+
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -31,7 +34,7 @@ type Library struct {
 	maxDepth   uint   // maximum traversal depth (unlimited: 0)
 
 	dataDir string    // directory containing all known library databases
-	data    *Database // database containing all known media in this library
+	db      *Database // database containing all known media in this library
 
 	newMedia     chan *Discovery // media discovery
 	newDirectory chan *Discovery // subdirectory discovery
@@ -40,6 +43,10 @@ type Library struct {
 	scanComplete chan bool      // synchronization lock
 	scanStart    chan time.Time // counting semaphore to limit number of concurrent scanners
 	scanElapsed  time.Duration  // measures time elapsed for scan to complete (use internally, not thread-safe!)
+
+	loadComplete chan bool      // synchronization lock
+	loadStart    chan time.Time // counting semaphore to limit number of concurrent loaders
+	loadElapsed  time.Duration  // measures time elapsed for load to complete (use internally, not thread-safe!)
 }
 
 // type PathHandler represents a function that accepts a *Library, file path,
@@ -49,10 +56,6 @@ type PathHandler func(*Library, string, ...interface{})
 type ScanHandler struct {
 	handleEnter, handleExit, handleMedia, handleAux, handleOther PathHandler
 }
-
-// var defaultScanHandler is a simple event handler that essentially delegates
-// all significant work onto the discovery channel polling routines.
-var defaultScanHandler *ScanHandler
 
 // type Discovery represents any sort of file entity discovered during a file
 // system traversal of the library; we can capture here any other useful info
@@ -77,32 +80,7 @@ const (
 
 // function init() initializes all of the locally-declared data for use both
 // locally and globally
-func init() {
-	defaultScanHandler = &ScanHandler{
-		// the scanner entered a subdirectory of the library's file system.
-		handleEnter: func(l *Library, p string, v ...interface{}) {
-			l.newDirectory <- newDiscovery(p)
-		},
-		// the scanner exited a subdirectory of the library's file system.
-		handleExit: func(l *Library, p string, v ...interface{}) {
-		},
-		// the scanner identified some file in a subdirectory of the library's
-		// file system as a media file.
-		handleMedia: func(l *Library, p string, v ...interface{}) {
-			l.newMedia <- newDiscovery(v...)
-		},
-		// the scanner identified some file in a subdirectory of the library's
-		// file system as a supporting auxiliary file to a known or as-of-yet
-		// unknown media file.
-		handleAux: func(l *Library, p string, v ...interface{}) {
-			l.newAuxiliary <- newDiscovery(v...)
-		},
-		// the scanner identified some file in a subdirectory of the library's
-		// file system as an undesirable piece of trash.
-		handleOther: func(l *Library, p string, v ...interface{}) {
-		},
-	}
-}
+func init() {}
 
 // function newLibrary() creates and initializes a new Library ready to scan.
 // the library database is also created if one doesn't already exist, otherwise
@@ -150,7 +128,7 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 	}
 
 	// open or create the library database if it doesn't exist.
-	dba, ret := newDatabase(opt, abs, dat)
+	db, ret := newDatabase(opt, abs, dat)
 	if nil != ret {
 		return nil, ret
 	}
@@ -163,7 +141,7 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 
 		// path to the library database directory.
 		dataDir: dat,
-		data:    dba,
+		db:      db,
 
 		// channels for communicating scanner data to the main thread.
 		newMedia:     make(chan *Discovery),
@@ -173,13 +151,17 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		scanComplete: make(chan bool),
 		scanStart:    make(chan time.Time, maxLibraryScanners),
 		scanElapsed:  0,
+
+		loadComplete: make(chan bool),
+		loadStart:    make(chan time.Time, maxLibraryScanners),
+		loadElapsed:  0,
 	}, nil
 }
 
 // creates a string representation of the Library for easy identification in
 // logs.
 func (l *Library) String() string {
-	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.data)
+	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.db)
 }
 
 // function walk() is the recursive step for the file system traversal, invoked
@@ -214,7 +196,6 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 	// operate on the file based on its file mode.
 	switch {
 	case (mode & os.ModeDir) > 0:
-
 		// file is directory, walk its contents unless we are at max depth.
 		if depthUnlimited != l.maxDepth && depth > l.maxDepth {
 			return rcDirDepth.specf(
@@ -233,9 +214,10 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 		dir.Close()
 		// don't add the library path itself to its list of subdirectories.
 		if depth > 1 {
+			//infoLog.tracef("entered subdirectory: %s", absPath)
 			// fire the on-enter-directory event handler.
 			if nil != sh && nil != sh.handleEnter {
-				sh.handleEnter(l, absPath)
+				sh.handleEnter(l, absPath, nil)
 			}
 		}
 		// recursively walk all of this subdirectory's contents.
@@ -248,7 +230,7 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 		}
 		// fire the on-exit-directory event handler.
 		if nil != sh && nil != sh.handleExit {
-			sh.handleExit(l, absPath)
+			sh.handleExit(l, absPath, nil)
 		}
 		return nil
 
@@ -263,38 +245,67 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 			"walk(%q, %d): not a regular file (skipping)", dispPath, depth)
 
 	default:
-
 		// first extract the file name extension. this is how we determine file
 		// type; not very intelligible, but fast and mostly reliable for media
-		// files.
+		// files (~my~ media files, at least).
 		ext := path.Ext(absPath)
 
 		// check if it looks like a regular media file.
 		switch kind, extName := mediaKindOfFileExt(ext); kind {
 		case mkAudio:
-			if nil != sh && nil != sh.handleMedia {
-				media, errCode := newAudioMedia(l, absPath, relPath, ext, extName, fileInfo)
-				if nil != errCode {
-					return errCode
-				}
-				sh.handleMedia(l, absPath, media)
+			audio, errCode := newAudioMedia(l, absPath, relPath, ext, extName, fileInfo)
+			if nil != errCode {
+				return errCode
 			}
+			infoLog.tracef("discovered media: %s", audio)
+
+			if nil != sh && nil != sh.handleMedia {
+				sh.handleMedia(l, absPath, audio)
+			}
+
 		case mkVideo:
-			if nil != sh && nil != sh.handleMedia {
-				media, errCode := newVideoMedia(l, absPath, relPath, ext, extName, fileInfo)
-				if nil != errCode {
-					return errCode
-				}
-				sh.handleMedia(l, absPath, media)
+
+			vc := l.db.col[colName[mkVideo]]
+
+			var query interface{}
+			json.Unmarshal([]byte(fmt.Sprintf(`[{"eq": "%s", "in": ["absPath"]}]`, absPath)), &query)
+
+			result := make(map[int]struct{})
+			if err := db.EvalQuery(query, vc, &result); nil != err {
+				return rcInvalidFile.specf(
+					"walk(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
 			}
+
+			video, errCode := newVideoMedia(l, absPath, relPath, ext, extName, fileInfo)
+			if nil != errCode {
+				return errCode
+			}
+
+			if 0 == len(result) {
+				infoLog.tracef("discovered media: %s", video)
+				vc.Insert(*video.toRecord())
+			} else {
+				//infoLog.tracef("loaded media: %s", video)
+			}
+
+			if nil != sh && nil != sh.handleMedia {
+				sh.handleMedia(l, absPath, video)
+			}
+
 		default:
 			// doesn't have an extension typically associated with media files.
 			// check if it is a media-supporting file.
 			switch kind, extName := mediaSupportKindOfFileExt(ext); kind {
 			case mskSubtitles:
+				// TODO: add subs to collection of all subtitles available for
+				//       association with a video media.
+
+				//infoLog.tracef("discovered subtitles: %q: %s (%s)", absPath, extName, ext)
+
 				if nil != sh && nil != sh.handleAux {
-					sh.handleAux(l, absPath, mskSubtitles, ext, extName, fileInfo)
+					sh.handleAux(l, absPath, mskSubtitles, ext, extName, fileInfo, absPath)
 				}
+
 			default:
 				// cannot identify the file, probably an undesirable piece of
 				// trash. well-suited for being ignored.
@@ -350,5 +361,48 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 			l.absPath, maxLibraryScanners)
 	}
 	l.scanComplete <- true
+	return err
+}
+
+// function load() is the entry point for initiating a load on the library's
+// backing data store. currently, the load is dispatched and cannot be safely
+// interruped. you must wait for the load to finish before restarting.
+func (l *Library) load() *ReturnCode {
+
+	var err *ReturnCode
+
+	//
+	// the loadStart channel is buffered so that we can limit the number of
+	// goroutines concurrently reading this library's database:
+	//
+	//     writes to the channel will fail and fallback on the default select
+	//     case if the max number of loaders is reached -- which sets an error
+	//     code that is returned to the caller -- so be sure to check
+	//     the return value when calling function load()!
+	//
+
+	// try writing to the buffered channel. this will succeed if and only if it
+	// isn't already filled to capacity.
+	select {
+	case l.loadStart <- time.Now():
+		// the write succeeded, so we can initiate loading. keep track of the
+		// time at which we began so that the time elapsed can be calculated and
+		// notified to the user.
+		infoLog.verbosef("loading: %q", l.name)
+
+		l.loadElapsed = time.Since(<-l.loadStart)
+		infoLog.verbosef(
+			"finished loading: %q (%s)",
+			l.name, l.loadElapsed.Round(time.Millisecond))
+	default:
+		// if the write failed, we fall back to this default case. the only
+		// reason it should fail is if the buffer is already filled to capacity,
+		// meaning we already have the max allowed number of goroutines loading
+		// this library's database.
+		err = rcLibraryBusy.specf(
+			"scan(): max number of loaders reached: %q (max = %d)",
+			l.absPath, maxLibraryScanners)
+	}
+	l.loadComplete <- true
 	return err
 }
