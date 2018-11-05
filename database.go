@@ -26,6 +26,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -35,14 +36,16 @@ const (
 
 	kibiBytes = 1024
 	mebiBytes = 1048576
+)
 
+var (
 	// see type JSONDataConfig for a description of these items
 	defaultDBRecMaxSize = 1 * mebiBytes
-	defaultDBBufferSize = 4 * defaultDBRecMaxSize
+	defaultDBBufferSize = 4 * defaultDBRecMaxSize / runtime.NumCPU()
 	defaultDBBucketSize = 16
-	defaultDBHashGrowth = 4 * mebiBytes // 32 * mebiBytes
-	defaultDBHashedBits = 13            // 16
-	defaultDBNumBuckets = 8192          // 65536
+	defaultDBHashGrowth = defaultDBRecMaxSize / 2 / runtime.NumCPU()
+	defaultDBHashedBits = 13
+	defaultDBNumBuckets = 8192
 )
 
 // variable colName maps the MediaKind enum values to the string name of their
@@ -161,8 +164,9 @@ type Database struct {
 	name    string // libPath checksum (name of database directory)
 	dataDir string // directory containing all known library databases
 
-	store *db.DB             // interactive database object
-	col   map[string]*db.Col // db collections stored by name
+	store      *db.DB           // interactive database object
+	col        [mkCOUNT]*db.Col // db collections referenced by MediaKind
+	numRecords [mkCOUNT]uint    // number of records in each collection
 }
 
 // function newDatabase() creates a new high-level database object through
@@ -299,11 +303,13 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 
 	// initialize the new struct object.
 	base := &Database{
-		absPath: path,
-		libPath: abs,
-		name:    sum,
-		dataDir: dat,
-		store:   store,
+		absPath:    path,
+		libPath:    abs,
+		name:       sum,
+		dataDir:    dat,
+		store:      store,
+		col:        [mkCOUNT]*db.Col{},
+		numRecords: [mkCOUNT]uint{},
 	}
 
 	// initialize the backing data store by creating the required collections;
@@ -340,10 +346,10 @@ func (d *Database) close() (bool, *ReturnCode) {
 func (d *Database) initialize() (bool, *ReturnCode) {
 
 	// allocate name-collection map
-	d.col = make(map[string]*db.Col, len(colName))
+	//d.col = make(map[string]*db.Col, len(colName))
 
 	// iterate over all required collection names
-	for _, name := range colName {
+	for kind, name := range colName {
 		// verify it is available
 		existed := d.store.ColExists(name)
 		if !existed {
@@ -356,12 +362,14 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 		}
 
 		// keep a reference to the collection handler
-		d.col[name] = d.store.Use(name)
+		d.col[kind] = d.store.Use(name)
 
 		if !existed {
-			if err := d.col[name].Index([]string{"absPath"}); nil != err {
-				return false, rcDatabaseError.specf(
-					"initialize(): %s: Index(%q): %s", d, name, err)
+			for _, idx := range mediaIndex {
+				if err := d.col[kind].Index(idx); nil != err {
+					return false, rcDatabaseError.specf(
+						"initialize(): %s: Index(%q): %s", d, name, err)
+				}
 			}
 		}
 	}
@@ -371,12 +379,12 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 // function scrub() fixes corrupt records and defragments disk space used by the
 // database -- performed on all collections in the database.
 func (d *Database) scrub() {
-	for _, name := range colName {
+	for kind, name := range colName {
 		if d.store.ColExists(name) {
 			d.store.Scrub(name)
 		}
 		// after Scrub(), tiedot has potentially reallocated space elsewhere and
 		// the reference is probably no longer valid.
-		d.col[name] = d.store.Use(name)
+		d.col[kind] = d.store.Use(name)
 	}
 }

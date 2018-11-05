@@ -51,7 +51,7 @@ type Library struct {
 
 // type PathHandler represents a function that accepts a *Library, file path,
 // and variable number of additional arguments. this is intended for use by the
-// function walk() when it encounters files and directories.
+// function scanDive() when it encounters files and directories.
 type PathHandler func(*Library, string, ...interface{})
 type ScanHandler struct {
 	handleEnter, handleExit, handleMedia, handleAux, handleOther PathHandler
@@ -118,10 +118,10 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		return nil, rcInvalidLibrary.specf(
 			"newLibrary(%q, %q): os.Open(): %s", dat, lib, err)
 	}
-	defer fds.Close()
 
 	// read all content of the root directory in the library file system.
 	_, err = fds.Readdir(0)
+	fds.Close()
 	if nil != err {
 		return nil, rcInvalidLibrary.specf(
 			"newLibrary(%q, %q): Readdir(): %s", dat, lib, err)
@@ -158,93 +158,105 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 	}, nil
 }
 
-// creates a string representation of the Library for easy identification in
-// logs.
+// function String() creates a string representation of the Library for easy
+// identification in logs.
 func (l *Library) String() string {
 	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.db)
 }
 
-// function walk() is the recursive step for the file system traversal, invoked
-// initially by function scan(). error codes generated in this routine will be
-// returned to the caller of walk() -and- the caller of scan().
-func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode {
+// function scanDive() is the recursive step for the file system traversal,
+// invoked initially by function scan(). error codes generated in this routine
+// will be returned to the caller of scanDive() -and- the caller of scan().
+func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (uint, *ReturnCode) {
 
-	// get a path to the file relative to the current working dir (useful for
+	// get a path to the file relative to the library root dir (useful for
 	// displaying diagnostic info to the user).
-	relPath, err := filepath.Rel(l.workingDir, absPath)
+	relPath, err := filepath.Rel(l.absPath, absPath)
 	if nil != err {
-		return rcInvalidPath.specf(
-			"walk(%q, %d): filepath.Rel(%q): %s", absPath, depth, l.workingDir, err)
+		return count, rcInvalidPath.specf(
+			"scanDive(%q, %d): filepath.Rel(%q): %s", absPath, depth, l.absPath, err)
 	}
 
-	// the purpose of showing the relative path is concision -- readability. if
-	// that relative path is longer (e.g. a bunch of "../../..") than the
-	// absolute path, then just show the absolute path instead.
-	dispPath := absPath // absPath wins the tiebreak if equal length
-	if len(relPath) < len(absPath) {
-		dispPath = relPath
-	}
+	// for concision, show the relative path by default in any diagnostics/logs.
+	//dispPath := absPath
+	dispPath := relPath
 
 	// read fs attributes to determine how we handle the file.
 	fileInfo, err := os.Lstat(absPath)
 	if nil != err {
-		return rcInvalidStat.specf(
-			"walk(%q, %d): os.Lstat(): %s", dispPath, depth, err)
+		return count, rcInvalidStat.specf(
+			"scanDive(%q, %d): os.Lstat(): %s", dispPath, depth, err)
 	}
 	mode := fileInfo.Mode()
 
 	// operate on the file based on its file mode.
 	switch {
 	case (mode & os.ModeDir) > 0:
-		// file is directory, walk its contents unless we are at max depth.
+		// file is directory, scanDive its contents unless we are at max depth.
 		if depthUnlimited != l.maxDepth && depth > l.maxDepth {
-			return rcDirDepth.specf(
-				"walk(%q, %d): limit = %d", dispPath, depth, l.maxDepth)
+			return count, rcDirDepth.specf(
+				"scanDive(%q, %d): limit = %d", dispPath, depth, l.maxDepth)
 		}
 		dir, err := os.Open(absPath)
 		if nil != err {
-			return rcDirOpen.specf(
-				"walk(%q, %d): os.Open(): %s", dispPath, depth, err)
+			return count, rcDirOpen.specf(
+				"scanDive(%q, %d): os.Open(): %s", dispPath, depth, err)
 		}
-		contentInfo, err := dir.Readdir(0)
-		if nil != err {
-			return rcDirOpen.specf(
-				"walk(%q, %d): dir.Readdir(): %s", dispPath, depth, err)
-		}
+		dirName, err := dir.Readdirnames(0)
 		dir.Close()
+		if nil != err {
+			return count, rcDirOpen.specf(
+				"scanDive(%q, %d): dir.Readdirnames(): %s", dispPath, depth, err)
+		}
+
 		// don't add the library path itself to its list of subdirectories.
 		if depth > 1 {
-			//infoLog.tracef("entered subdirectory: %s", absPath)
 			// fire the on-enter-directory event handler.
 			if nil != sh && nil != sh.handleEnter {
 				sh.handleEnter(l, absPath, nil)
 			}
 		}
-		// recursively walk all of this subdirectory's contents.
-		for _, info := range contentInfo {
-			err := l.walk(path.Join(absPath, info.Name()), depth+1, sh)
-			if nil != err {
+
+		// recursively scan all of this subdirectory's contents.
+		for _, name := range dirName {
+			var scanErr *ReturnCode
+			count, scanErr = l.scanDive(path.Join(absPath, name), depth+1, count, sh)
+			if nil != scanErr {
 				// a file/subdir of the current directory threw an error.
-				warnLog.verbose(err)
+				warnLog.verbose(scanErr)
 			}
 		}
 		// fire the on-exit-directory event handler.
 		if nil != sh && nil != sh.handleExit {
 			sh.handleExit(l, absPath, nil)
 		}
-		return nil
+		return count, nil
 
 	case (mode & os.ModeSymlink) > 0:
 		// symlinks currently unhandled.
-		return rcInvalidFile.specf(
-			"walk(%q, %d): symlinks not supported! (skipping)", dispPath, depth)
+		return count, rcInvalidFile.specf(
+			"scanDive(%q, %d): symlinks not supported! (skipping)", dispPath, depth)
 
 	case (mode & (os.ModeDevice | os.ModeNamedPipe | os.ModeSocket | os.ModeCharDevice)) > 0:
 		// file is not a regular file, not supported.
-		return rcInvalidFile.specf(
-			"walk(%q, %d): not a regular file (skipping)", dispPath, depth)
+		return count, rcInvalidFile.specf(
+			"scanDive(%q, %d): not a regular file (skipping)", dispPath, depth)
 
 	default:
+
+		// function seenFile() checks if the file specified by path and kind of
+		// media exists in the associated collection of this library's database.
+		seenFile := func(col *db.Col, path string) (bool, error) {
+			var query interface{}
+			json.Unmarshal([]byte(fmt.Sprintf(
+				`[{"eq": "%s", "in": ["%s"]}]`, path, mediaIndex[mxPath][0])), &query)
+			result := make(map[int]struct{})
+			if err := db.EvalQuery(query, col, &result); nil != err {
+				return false, err
+			}
+			return len(result) > 0, nil
+		}
+
 		// first extract the file name extension. this is how we determine file
 		// type; not very intelligible, but fast and mostly reliable for media
 		// files (~my~ media files, at least).
@@ -253,43 +265,41 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 		// check if it looks like a regular media file.
 		switch kind, extName := mediaKindOfFileExt(ext); kind {
 		case mkAudio:
-			audio, errCode := newAudioMedia(l, absPath, relPath, ext, extName, fileInfo)
-			if nil != errCode {
-				return errCode
-			}
-			infoLog.tracef("discovered media: %s", audio)
 
-			if nil != sh && nil != sh.handleMedia {
-				sh.handleMedia(l, absPath, audio)
+			ac := l.db.col[mkAudio]
+			seen, err := seenFile(ac, absPath)
+			if err != nil {
+				return count, rcInvalidFile.specf(
+					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
+			}
+
+			if !seen {
+				audio := newAudioMedia(l, absPath, relPath, ext, extName, fileInfo)
+				count++
+				infoLog.tracef("discovered audio: %s", audio)
+				ac.Insert(*audio.toRecord())
+				if nil != sh && nil != sh.handleMedia {
+					sh.handleMedia(l, absPath, audio)
+				}
 			}
 
 		case mkVideo:
 
-			vc := l.db.col[colName[mkVideo]]
-
-			var query interface{}
-			json.Unmarshal([]byte(fmt.Sprintf(`[{"eq": "%s", "in": ["absPath"]}]`, absPath)), &query)
-
-			result := make(map[int]struct{})
-			if err := db.EvalQuery(query, vc, &result); nil != err {
-				return rcInvalidFile.specf(
-					"walk(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
+			vc := l.db.col[mkVideo]
+			seen, err := seenFile(vc, absPath)
+			if err != nil {
+				return count, rcInvalidFile.specf(
+					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
 			}
 
-			video, errCode := newVideoMedia(l, absPath, relPath, ext, extName, fileInfo)
-			if nil != errCode {
-				return errCode
-			}
-
-			if 0 == len(result) {
-				infoLog.tracef("discovered media: %s", video)
+			if !seen {
+				video := newVideoMedia(l, absPath, relPath, ext, extName, fileInfo)
+				count++
+				infoLog.tracef("discovered video: %s", video)
 				vc.Insert(*video.toRecord())
-			} else {
-				//infoLog.tracef("loaded media: %s", video)
-			}
-
-			if nil != sh && nil != sh.handleMedia {
-				sh.handleMedia(l, absPath, video)
+				if nil != sh && nil != sh.handleMedia {
+					sh.handleMedia(l, absPath, video)
+				}
 			}
 
 		default:
@@ -314,11 +324,11 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 				}
 			}
 		}
-		return nil
+		return count, nil
 	}
 
 	// we should never reach here
-	return nil
+	return count, nil
 }
 
 // function scan() is the entry point for initiating a scan on the library's
@@ -326,7 +336,10 @@ func (l *Library) walk(absPath string, depth uint, sh *ScanHandler) *ReturnCode 
 // interruped. you must wait for the scan to finish before restarting.
 func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 
-	var err *ReturnCode
+	var (
+		count uint = 0 // number of -new- files discovered on file system
+		err   *ReturnCode
+	)
 
 	//
 	// the scanStart channel is buffered so that we can limit the number of
@@ -346,11 +359,11 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
 		infoLog.verbosef("scanning: %q", l.name)
-		err = l.walk(l.absPath, 1, handler)
+		count, err = l.scanDive(l.absPath, 1, 0, handler)
 		l.scanElapsed = time.Since(<-l.scanStart)
 		infoLog.verbosef(
-			"finished scanning: %q (%s)",
-			l.name, l.scanElapsed.Round(time.Millisecond))
+			"finished scanning: %q (%d media files in %s)",
+			l.name, count, l.scanElapsed.Round(time.Millisecond))
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
@@ -364,12 +377,44 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 	return err
 }
 
+func (l *Library) loadDive(kind MediaKind) (uint, *ReturnCode) {
+
+	var count uint = 0
+	l.db.col[kind].ForEachDoc(
+		func(id int, data []byte) (willMoveOn bool) {
+			switch kind {
+			case mkAudio:
+				audio := &AudioMedia{}
+				var query MediaRecord
+				json.Unmarshal(data, &query)
+				audio.fromRecord(query)
+				infoLog.tracef("loaded audio (ID = %d): %s", id, audio)
+
+			case mkVideo:
+				video := &VideoMedia{}
+				var query MediaRecord
+				json.Unmarshal(data, &query)
+				video.fromRecord(query)
+				infoLog.tracef("loaded video (ID = %d): %s", id, video)
+
+			default:
+			}
+			count++
+			return true // move on to the next document OR
+		})
+	return count, nil
+}
+
 // function load() is the entry point for initiating a load on the library's
 // backing data store. currently, the load is dispatched and cannot be safely
 // interruped. you must wait for the load to finish before restarting.
 func (l *Library) load() *ReturnCode {
 
-	var err *ReturnCode
+	var (
+		total uint = 0 // number of -existing- files loaded from database
+		count      = [mkCOUNT]uint{0, 0}
+		err   *ReturnCode
+	)
 
 	//
 	// the loadStart channel is buffered so that we can limit the number of
@@ -390,17 +435,25 @@ func (l *Library) load() *ReturnCode {
 		// notified to the user.
 		infoLog.verbosef("loading: %q", l.name)
 
+		for k := range colName {
+			count[k], err = l.loadDive(MediaKind(k))
+			if nil != err {
+				return err
+			}
+			total += count[k]
+		}
+
 		l.loadElapsed = time.Since(<-l.loadStart)
 		infoLog.verbosef(
-			"finished loading: %q (%s)",
-			l.name, l.loadElapsed.Round(time.Millisecond))
+			"finished loading: %q (%d media files in %s)",
+			l.name, total, l.loadElapsed.Round(time.Millisecond))
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
 		// meaning we already have the max allowed number of goroutines loading
 		// this library's database.
 		err = rcLibraryBusy.specf(
-			"scan(): max number of loaders reached: %q (max = %d)",
+			"load(): max number of loaders reached: %q (max = %d)",
 			l.absPath, maxLibraryScanners)
 	}
 	l.loadComplete <- true

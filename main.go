@@ -28,6 +28,7 @@ import (
 const (
 	defaultConfigPath  = "config"
 	defaultLibDataPath = "library.db"
+	defaultTimeLayout  = "2006-01-02T15:04:05.000Z"
 )
 
 // versioning information defined by compiler switches in Makefile.
@@ -37,10 +38,10 @@ var (
 	revision  string
 	buildtime string
 
-	// synonyms for "good"
-	adjGood = [...]string{"an acceptable", "a bad", "an excellent", "an exceptional", "a favorable", "a great", "a marvelous", "a positive", "a satisfactory", "a satisfying", "a superb", "a valuable", "a wonderful", "an ace", "a boss", "a bully", "a capital", "a choice", "a crack", "a nice", "a pleasing", "a prime", "a rad", "a sound", "a spanking", "a sterling", "a super", "a superior", "a welcome", "a worthy", "an admirable", "an agreeable", "a commendable", "a congenial", "a deluxe", "a first-class", "a first-rate", "a gnarly", "a gratifying", "a honorable", "a neat", "a precious", "a recherché", "a reputable", "a select", "a shipshape", "a splendid", "a stupendous", "a super-eminent", "a super-excellent", "a tip-top", "an up to snuff"}
-	// synonyms for "bad"
-	adjBad = [...]string{"a an atrocious", "an awful", "a cheap", "a crummy", "a dreadful", "a lousy", "a poor", "a rough", "a sad", "an unacceptable", "a blah", "a bummer", "a diddly", "a downer", "a garbage", "a gross", "an imperfect", "an inferior", "a junky", "a synthetic", "an abominable", "an amiss", "a bad news", "a beastly", "a bottom out", "a careless", "a cheesy", "a crappy", "a cruddy", "a defective", "a deficient", "a dissatisfactory", "an erroneous", "a fallacious", "a faulty", "a godawful", "a grody", "a grungy", "an icky", "an inadequate", "an incorrect", "a not good", "an off", "a raunchy", "a slipshod", "a stinking", "a substandard", "a the pits", "an unsatisfactory"}
+	// synonyms of "good" for function greeting()
+	adjGood = [...]string{"an acceptable", "an excellent", "an exceptional", "a favorable", "a great", "a marvelous", "a positive", "a satisfactory", "a satisfying", "a superb", "a valuable", "a wonderful", "an ace", "a boss", "a bully", "a capital", "a choice", "a crack", "a nice", "a pleasing", "a prime", "a rad", "a sound", "a spanking", "a sterling", "a super", "a superior", "a welcome", "a worthy", "an admirable", "an agreeable", "a commendable", "a congenial", "a deluxe", "a first-class", "a first-rate", "a gnarly", "a gratifying", "a honorable", "a neat", "a precious", "a recherché", "a reputable", "a select", "a shipshape", "a splendid", "a stupendous", "a super-eminent", "a super-excellent", "a tip-top", "an up to snuff"}
+	// synonyms of "bad" for function greeting()
+	adjBad = [...]string{"an atrocious", "a bad", "an awful", "a cheap", "a crummy", "a dreadful", "a lousy", "a poor", "a rough", "a sad", "an unacceptable", "a blah", "a bummer", "a diddly", "a downer", "a garbage", "a gross", "an imperfect", "an inferior", "a junky", "a synthetic", "an abominable", "an amiss", "a bad news", "a beastly", "a bottom out", "a careless", "a cheesy", "a crappy", "a cruddy", "a defective", "a deficient", "a dissatisfactory", "an erroneous", "a fallacious", "a faulty", "a godawful", "a grody", "a grungy", "an icky", "an inadequate", "an incorrect", "a not good", "an off", "a raunchy", "a slipshod", "a stinking", "a substandard", "an unsatisfactory"}
 )
 
 // type Option struct can contain any possible individual option configuration
@@ -89,27 +90,6 @@ type Options struct {
 	DBHashSize   *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
 }
 
-// function providedDBConfig() checks the "Provided" hash of the Options struct
-// for any of the options related to initial database configuration. this is
-// necessary to decide how to initialize the database. furthermore, a []string
-// will be returned containing the name of each option the user provided.
-func (o *Options) providedDBConfig() (bool, []string) {
-
-	list := []string{}
-	count := 0
-
-	if d, ok := o.Provided[o.DBBufferSize.name]; ok {
-		list = append(list, d.name)
-		count++
-	}
-	if d, ok := o.Provided[o.DBHashSize.name]; ok {
-		list = append(list, d.name)
-		count++
-	}
-
-	return 0 != count, list
-}
-
 // function configDir() constructs the full path to the directory containing all
 // of the program's supporting configuration data. if the user has defined a
 // specific config file (via -config arg), then use the _logical_ parent
@@ -120,6 +100,43 @@ func configDir(opt *Options) string {
 	} else {
 		return filepath.Dir(opt.Config.string)
 	}
+}
+
+// function greeting() generates a random adjective (synonym of "good" or "bad")
+// followed by a nominal time of day using the actual/current system time.
+// e.g. "a crummy evening", or "a splendid morning"
+func greeting() string {
+
+	n := time.Now()
+	d := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location())
+	rand.Seed(n.UnixNano())
+	var s, t string
+	if (n.Second() & 1) == 1 {
+		s = adjGood[rand.Intn(len(adjGood))]
+	} else {
+		s = adjBad[rand.Intn(len(adjBad))]
+	}
+
+	ne := &TimeInterval{d.Add(time.Hour * 00), d.Add(time.Hour * 05), "night"}     // 12AM-04:59:59AM
+	mo := &TimeInterval{d.Add(time.Hour * 05), d.Add(time.Hour * 12), "morning"}   // 05AM-11:59:59AM
+	af := &TimeInterval{d.Add(time.Hour * 12), d.Add(time.Hour * 17), "afternoon"} // 12PM-04:59:59PM
+	ev := &TimeInterval{d.Add(time.Hour * 17), d.Add(time.Hour * 22), "evening"}   // 05PM-09:59:59PM
+	nl := &TimeInterval{d.Add(time.Hour * 22), d.Add(time.Hour * 24), "night"}     // 10PM-11:59:59PM
+
+	if ne.contains(n) || nl.contains(n) {
+		t = ne.desc
+	}
+	if mo.contains(n) {
+		t = mo.desc
+	}
+	if af.contains(n) {
+		t = af.desc
+	}
+	if ev.contains(n) {
+		t = ev.desc
+	}
+
+	return fmt.Sprintf("have %s %s!", s, t)
 }
 
 // function main() is the program entry point, obviously.
@@ -191,54 +208,28 @@ func main() {
 	scanElapsed := time.Since(scanStart)
 	infoLog.logf("scan complete (%s)", scanElapsed.Round(time.Millisecond))
 
-	// -------------------------------------------------------------------------
+	infoLog.die(rcOK.spec(greeting()), false)
+}
 
-	// for _, l := range library {
-	// 	c := l.db.col[colName[mkVideo]]
-	// 	c.ForEachDoc(
-	// 		func(id int, data []byte) (willMoveOn bool) {
-	// 			infoLog.logf("doc = %d, content = %s", id, string(data))
-	// 			return true // move on to the next document OR
-	// 		})
-	// }
+// function providedDBConfig() checks the "Provided" hash of the Options struct
+// for any of the options related to initial database configuration. this is
+// necessary to decide how to initialize the database. furthermore, a []string
+// will be returned containing the name of each option the user provided.
+func (o *Options) providedDBConfig() (bool, []string) {
 
-	// -------------------------------------------------------------------------
+	list := []string{}
+	provided := false
 
-	greeting := func() string {
-
-		n := time.Now()
-		d := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location())
-		rand.Seed(n.UnixNano())
-		var s, t string
-		if (n.Second() & 1) == 1 {
-			s = adjGood[rand.Intn(len(adjGood))]
-		} else {
-			s = adjBad[rand.Intn(len(adjBad))]
-		}
-
-		ne := &TimeInterval{d.Add(time.Hour * 00), d.Add(time.Hour * 05), "night"}     // 12AM-04:59:59AM
-		mo := &TimeInterval{d.Add(time.Hour * 05), d.Add(time.Hour * 12), "morning"}   // 05AM-11:59:59AM
-		af := &TimeInterval{d.Add(time.Hour * 12), d.Add(time.Hour * 17), "afternoon"} // 12PM-04:59:59PM
-		ev := &TimeInterval{d.Add(time.Hour * 17), d.Add(time.Hour * 22), "evening"}   // 05PM-09:59:59PM
-		nl := &TimeInterval{d.Add(time.Hour * 22), d.Add(time.Hour * 24), "night"}     // 10PM-11:59:59PM
-
-		if ne.contains(n) || nl.contains(n) {
-			t = ne.desc
-		}
-		if mo.contains(n) {
-			t = mo.desc
-		}
-		if af.contains(n) {
-			t = af.desc
-		}
-		if ev.contains(n) {
-			t = ev.desc
-		}
-
-		return fmt.Sprintf("have %s %s!", s, t)
+	if d, ok := o.Provided[o.DBBufferSize.name]; ok {
+		list = append(list, d.name)
+		provided = true
+	}
+	if d, ok := o.Provided[o.DBHashSize.name]; ok {
+		list = append(list, d.name)
+		provided = true
 	}
 
-	infoLog.die(rcOK.spec(greeting()), false)
+	return provided, list
 }
 
 // function initOptions() parses all command line arguments and prepares the
@@ -308,8 +299,6 @@ func initOptions() (options *Options, err *ReturnCode) {
 			int:   defaultDBHashGrowth,
 		},
 	}
-	// DBBufferSize    *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
-	// DBHashSize      *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
 	knownOptions := NamedOption{
 		"help":         options.UsageHelp,
 		"verbose":      options.Verbose,
