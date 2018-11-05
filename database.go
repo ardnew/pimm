@@ -18,7 +18,7 @@ import (
 	"ardnew.com/goutil"
 
 	"github.com/HouzuoGuo/tiedot/db"
-	//"github.com/HouzuoGuo/tiedot/dberr"
+	//"github.com/davecgh/go-spew/spew"
 
 	"encoding/json"
 	"fmt"
@@ -106,29 +106,29 @@ func newJSONDataConfig(opt *Options) (*JSONDataConfig, *ReturnCode) {
 // of being read from a file by the tiedot runtime.
 func (c *JSONDataConfig) marshal(indent bool) ([]byte, *ReturnCode) {
 
-	var js []byte
+	var data []byte
 	var err error
 
 	if indent {
-		js, err = json.MarshalIndent(c, "", "  ")
+		data, err = json.MarshalIndent(c, "", "  ")
 	} else {
-		js, err = json.Marshal(c)
+		data, err = json.Marshal(c)
 	}
 	if nil != err {
 		return nil, rcInvalidJSONData.specf(
 			"marshal(%s): cannot marshal struct into JSON object: %s", c, err)
 	}
-	return js, nil
+	return data, nil
 }
 
 // function unmarshal() unmarshals the tiedot-defined json configuration string
 // into a JSONDataConfig{} struct.
-func (c *JSONDataConfig) unmarshal(js []byte) *ReturnCode {
+func (c *JSONDataConfig) unmarshal(data []byte) *ReturnCode {
 
-	if err := json.Unmarshal(js, c); nil != err {
+	if err := json.Unmarshal(data, c); nil != err {
 		return rcInvalidJSONData.specf(
 			"unmarshal(%q): cannot unmarshal JSON object into struct: %s",
-			string(js), err)
+			string(data), err)
 	}
 	return nil
 }
@@ -201,8 +201,8 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 	// check if a config file already exists; i.e. if a config file already
 	// exists, then we assume this library's database has already been
 	// configured (and the library possibly even scanned) sometime in the past.
-	jsPath := filepath.Join(path, dataConfigFileName)
-	if exists, _ := goutil.PathExists(jsPath); exists {
+	configPath := filepath.Join(path, dataConfigFileName)
+	if exists, _ := goutil.PathExists(configPath); exists {
 
 		// this is a known library, so its database configuration has already
 		// been defined. verify the user isn't trying to change the database
@@ -214,25 +214,25 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 			// command-line, so we need to compare them against the
 			// configuration file on disk. read the file from disk.
 			jdcPrev := &JSONDataConfig{}
-			jsPrev, err := ioutil.ReadFile(jsPath)
+			dataPrev, err := ioutil.ReadFile(configPath)
 			if nil != err {
 				return nil, rcDatabaseError.specf(
 					"newDatabase(%q, %q): ioutil.ReadFile(%q): %s",
-					abs, dat, jsPath, err)
+					abs, dat, configPath, err)
 			}
 
 			// now unmarshal the file's json string into a configuration struct.
-			if ret := jdcPrev.unmarshal(jsPrev); nil != ret {
+			if ret := jdcPrev.unmarshal(dataPrev); nil != ret {
 				return nil, ret
 			}
 
 			// construct a string of all of the user's actual command-line
 			// arguments they provided to configure the database.
-			given := make([]string, len(userOptions))
+			args := make([]string, len(userOptions))
 			for i, str := range userOptions {
-				given[i] = "-" + str
+				args[i] = "-" + str
 			}
-			csv := strings.Join(given, ", ")
+			csv := strings.Join(args, ", ")
 
 			// verify the arguments are the same as the database configuration.
 			// if they are not the same, bail out with an insanely long and
@@ -267,7 +267,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 
 		// marshal the configuration struct into a json string for writing into
 		// the config file which is read by and used by the tiedot runtime.
-		js, ret := jdc.marshal(true)
+		data, ret := jdc.marshal(true)
 		if nil != ret {
 			return nil, ret
 		}
@@ -275,10 +275,10 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 		// flush the formatted json string to the config file on disk. this is
 		// the permanent configuration used by the database runtime from now on
 		// and cannot be changed.
-		if err := ioutil.WriteFile(jsPath, js, dataConfigFilePerms); nil != err {
+		if err := ioutil.WriteFile(configPath, data, dataConfigFilePerms); nil != err {
 			return nil, rcDatabaseError.specf(
 				"newDatabase(%q, %q): ioutil.WriteFile(%q, %s, %d): %s",
-				abs, dat, jsPath, js, dataConfigFilePerms, err)
+				abs, dat, configPath, data, dataConfigFilePerms, err)
 		}
 
 		// notify the user if the database configuration written to file came

@@ -14,6 +14,9 @@
 package main
 
 import (
+	//"github.com/davecgh/go-spew/spew"
+
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -35,7 +38,7 @@ const (
 
 var (
 	mediaIndex = [mxCOUNT]MediaIndex{
-		MediaIndex{"absPath"}, // = mxPath (0)
+		MediaIndex{"AbsPath"}, // = mxPath (0)
 	}
 )
 
@@ -43,52 +46,52 @@ var (
 // fields are common among both audio and video.
 type Media struct {
 	// fixed, read-only system info
-	absPath      string      // absolute path to media file
-	relPath      string      // CWD-relative path to media file
-	size         int64       // length in bytes for regular files; system-dependent for others
-	mode         os.FileMode // file mode bits
-	timeModified time.Time   // modification time
-	sysInfo      interface{} // underlying data source (can return nil)
-	kind         MediaKind   // type of media
-	ext          string      // file name extension
-	extName      string      // name of file type/encoding (per file name extension)
+	AbsPath      string      // absolute path to media file
+	RelPath      string      // CWD-relative path to media file
+	Size         int64       // length in bytes for regular files; system-dependent for others
+	Mode         os.FileMode // file mode bits
+	TimeModified time.Time   // modification time
+	SysInfo      interface{} // underlying data source (can return nil)
+	Kind         MediaKind   // type of media
+	Ext          string      // file name extension
+	ExtName      string      // name of file type/encoding (per file name extension)
 	// user-writable system info
-	name            string    // displayed name
-	timeAdded       time.Time // date media was discovered and added to library
-	playbackCommand string    // full system command used to play media
+	Name            string    // displayed name
+	TimeAdded       time.Time // date media was discovered and added to library
+	PlaybackCommand string    // full system command used to play media
 	// user-writable public media info
-	title       string    // official name of media
-	description string    // synopsis/summary of media content
-	releaseDate time.Time // date media was produced/released
+	Title       string    // official name of media
+	Description string    // synopsis/summary of media content
+	ReleaseDate time.Time // date media was produced/released
 }
 
 // type AudioMedia is a specialized type of media containing struct fields
 // relevant only to video.
 type AudioMedia struct {
 	*Media
-	album string // name of the album on which the track appears
-	track int    // numbered index of where track is located on album
+	Album string // name of the album on which the track appears
+	Track int64  // numbered index of where track is located on album
 }
 
 // type VideoMedia is a specialized type of media containing struct fields
 // relevant only to audio.
 type VideoMedia struct {
 	*Media
-	knownSubtitles []Subtitles // absolute path to all associated subtitles
-	subtitles      Subtitles   // absolute path to selected subtitles
+	KnownSubtitles []Subtitles // absolute path to all associated subtitles
+	Subtitles      Subtitles   // absolute path to selected subtitles
 }
 
 // TODO: type Subtitles contains all of the important information needed to
 //       associate a subtitles file with a given Media object.
 type Subtitles struct {
-	absPath      string      // absolute path to media file
-	relPath      string      // CWD-relative path to media file
-	size         int64       // length in bytes for regular files; system-dependent for others
-	mode         os.FileMode // file mode bits
-	timeModified time.Time   // modification time
-	sysInfo      interface{} // underlying data source (can return nil)
-	ext          string      // file name extension
-	extName      string      // name of file type/encoding (per file name extension)
+	AbsPath      string      // absolute path to media file
+	RelPath      string      // CWD-relative path to media file
+	Size         int64       // length in bytes for regular files; system-dependent for others
+	Mode         os.FileMode // file mode bits
+	TimeModified time.Time   // modification time
+	SysInfo      interface{} // underlying data source (can return nil)
+	Ext          string      // file name extension
+	ExtName      string      // name of file type/encoding (per file name extension)
 }
 
 // type MediaRecord represents the struct stored in the database for an
@@ -98,8 +101,8 @@ type MediaRecord map[string]interface{}
 // type StorableMedia defines the methods necessary to store and retrieve a
 // Media record from the database.
 type StorableMedia interface {
-	toRecord() *MediaRecord // creates a struct capable of being stored in the database.
-	fromRecord(MediaRecord) // creates a struct using the record stored in the database.
+	toRecord() (*MediaRecord, *ReturnCode) // creates a struct capable of being stored in the database.
+	fromRecord([]byte) *ReturnCode         // creates a struct using the record stored in the database.
 }
 
 // type MediaKind is an enum identifying the different supported types of
@@ -132,32 +135,32 @@ const (
 func newMedia(lib *Library, absPath, relPath string, kind MediaKind, ext, extName string, info os.FileInfo) *Media {
 
 	return &Media{
-		absPath:         absPath,        // (string)      absolute path to media file
-		relPath:         relPath,        // (string)      CWD-relative path to media file
-		size:            info.Size(),    // (int64)       length in bytes for regular files; system-dependent for others
-		mode:            info.Mode(),    // (os.FileMode) file mode bits
-		timeModified:    info.ModTime(), // (time.Time)   modification time
-		sysInfo:         info.Sys(),     // (interface{}) underlying data source (can return nil)
-		kind:            kind,           // (MediaKind)   type of media
-		ext:             ext,            // (string)      file name extension
-		extName:         extName,        // (string)      name of file type/encoding (per file name extension)
-		name:            info.Name(),    // (string)      displayed name
-		timeAdded:       time.Now(),     // (time.Time)   date media was discovered and added to library
-		playbackCommand: "--",           // (string)      full system command used to play media
-		title:           info.Name(),    // (string)      official name of media
-		description:     "--",           // (string)      synopsis/summary of media content
-		releaseDate:     time.Time{},    // (time.Time)   date media was produced/released
+		AbsPath:         absPath,        // (string)      absolute path to media file
+		RelPath:         relPath,        // (string)      CWD-relative path to media file
+		Size:            info.Size(),    // (int64)       length in bytes for regular files; system-dependent for others
+		Mode:            info.Mode(),    // (os.FileMode) file mode bits
+		TimeModified:    info.ModTime(), // (time.Time)   modification time
+		SysInfo:         info.Sys(),     // (interface{}) underlying data source (can return nil)
+		Kind:            kind,           // (MediaKind)   type of media
+		Ext:             ext,            // (string)      file name extension
+		ExtName:         extName,        // (string)      name of file type/encoding (per file name extension)
+		Name:            info.Name(),    // (string)      displayed name
+		TimeAdded:       time.Now(),     // (time.Time)   date media was discovered and added to library
+		PlaybackCommand: "--",           // (string)      full system command used to play media
+		Title:           info.Name(),    // (string)      official name of media
+		Description:     "--",           // (string)      synopsis/summary of media content
+		ReleaseDate:     time.Time{},    // (time.Time)   date media was produced/released
 	}
 }
 
 // creates a string representation of the Media for easy identification in logs.
 func (m *Media) String() string {
-	path := m.absPath
-	if "" != m.relPath && len(m.relPath) < len(m.absPath) {
-		path = m.relPath
+	path := m.AbsPath
+	if "" != m.RelPath && len(m.RelPath) < len(m.AbsPath) {
+		path = m.RelPath
 	}
 	return fmt.Sprintf("%s [%s (%s)] (%d bytes) %v",
-		path, m.extName, m.ext, m.size, m.timeModified)
+		path, m.ExtName, m.Ext, m.Size, m.TimeModified)
 }
 
 func newAudioMedia(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *AudioMedia {
@@ -166,8 +169,8 @@ func newAudioMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 
 	return &AudioMedia{
 		Media: media, // common media info
-		album: "",    // name of the album on which the track appears
-		track: -1,    // numbered index of where track is located on album
+		Album: "",    // name of the album on which the track appears
+		Track: -1,    // numbered index of where track is located on album
 	}
 }
 
@@ -177,21 +180,21 @@ func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 
 	return &VideoMedia{
 		Media:          media,         // common media info
-		knownSubtitles: []Subtitles{}, // absolute path to all associated subtitles
-		subtitles:      Subtitles{},   // absolute path to selected subtitles
+		KnownSubtitles: []Subtitles{}, // absolute path to all associated subtitles
+		Subtitles:      Subtitles{},   // absolute path to selected subtitles
 	}
 }
 
 func newSubtitles(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *Subtitles {
 	return &Subtitles{
-		absPath:      absPath,        // absolute path to media file
-		relPath:      relPath,        // CWD-relative path to media file
-		size:         info.Size(),    // length in bytes for regular files; system-dependent for others
-		mode:         info.Mode(),    // file mode bits
-		timeModified: info.ModTime(), // modification time
-		sysInfo:      info.Sys(),     // underlying data source (can return nil)
-		ext:          ext,            // file name extension
-		extName:      extName,        // name of file type/encoding (per file name extension)
+		AbsPath:      absPath,        // absolute path to media file
+		RelPath:      relPath,        // CWD-relative path to media file
+		Size:         info.Size(),    // length in bytes for regular files; system-dependent for others
+		Mode:         info.Mode(),    // file mode bits
+		TimeModified: info.ModTime(), // modification time
+		SysInfo:      info.Sys(),     // underlying data source (can return nil)
+		Ext:          ext,            // file name extension
+		ExtName:      extName,        // name of file type/encoding (per file name extension)
 	}
 }
 
@@ -378,38 +381,31 @@ func mediaSupportKindOfFileExt(ext string) (MediaSupportKind, string) {
 
 // function record() creates a struct capable of being stored in the database.
 // defines type AudioMedia's implementation of the MediaRecord interface.
-func (m *AudioMedia) toRecord() *MediaRecord {
-	return &MediaRecord{
-		"absPath":         m.absPath,
-		"relPath":         m.relPath,
-		"size":            m.size,
-		"mode":            m.mode,
-		"timeModified":    m.timeModified,
-		"sysInfo":         m.sysInfo,
-		"kind":            m.kind,
-		"ext":             m.ext,
-		"extName":         m.extName,
-		"name":            m.name,
-		"timeAdded":       m.timeAdded,
-		"playbackCommand": m.playbackCommand,
-		"title":           m.title,
-		"description":     m.description,
-		"releaseDate":     m.releaseDate,
-		// audio-specific fields
-		"album": m.album,
-		"track": m.track,
+func (m *AudioMedia) toRecord() (*MediaRecord, *ReturnCode) {
+
+	var (
+		record *MediaRecord = &MediaRecord{}
+		data   []byte
+		err    error
+	)
+
+	if data, err = json.Marshal(m); nil != err {
+		return nil, rcInvalidJSONData.specf(
+			"toRecord(): json.Marshal(%s): cannot marshal AudioMedia struct into JSON object: %s", m, err)
 	}
+
+	if err = json.Unmarshal(data, record); nil != err {
+		return nil, rcInvalidJSONData.specf(
+			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into MediaRecord struct: %s", string(data), err)
+	}
+
+	return record, nil
 }
 
 // function fromRecord() creates a struct using the record stored in the
 // database. defines type AudioMedia's implementation of the MediaRecord
 // interface.
-func (m *AudioMedia) fromRecord(r MediaRecord) {
-
-	var (
-		v  interface{}
-		ok bool
-	)
+func (m *AudioMedia) fromRecord(data []byte) *ReturnCode {
 
 	// AudioMedia has an embedded Media struct -pointer- (not struct). so if we
 	// create a zeroized AudioMedia, the embedded Media will be a null pointer.
@@ -419,115 +415,42 @@ func (m *AudioMedia) fromRecord(r MediaRecord) {
 		m.Media = &Media{}
 	}
 
-	v, ok = r["absPath"]
-	if ok {
-		m.absPath = v.(string)
-	}
-	v, ok = r["relPath"]
-	if ok {
-		m.relPath = v.(string)
+	// unmarshal our media object directly into the target
+	if err := json.Unmarshal(data, m); nil != err {
+		return rcInvalidJSONData.specf(
+			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into AudioMedia struct: %s", string(data), err)
 	}
 
-	v, ok = r["size"]
-	if ok {
-		m.size = int64(v.(float64))
-	}
-	v, ok = r["mode"]
-	if ok {
-		m.mode = os.FileMode(v.(float64))
-	}
-	v, ok = r["timeModified"]
-	if ok {
-		t, _ := time.Parse(defaultTimeLayout, v.(string))
-		m.timeModified = t
-	}
-	v, ok = r["sysInfo"]
-	if ok {
-		m.sysInfo = v
-	}
-
-	v, ok = r["kind"]
-	if ok {
-		m.kind = MediaKind(v.(float64))
-	}
-	v, ok = r["ext"]
-	if ok {
-		m.ext = v.(string)
-	}
-	v, ok = r["extName"]
-	if ok {
-		m.extName = v.(string)
-	}
-	v, ok = r["name"]
-	if ok {
-		m.name = v.(string)
-	}
-	v, ok = r["timeAdded"]
-	if ok {
-		t, _ := time.Parse(defaultTimeLayout, v.(string))
-		m.timeAdded = t
-	}
-	v, ok = r["playbackCommand"]
-	if ok {
-		m.playbackCommand = v.(string)
-	}
-	v, ok = r["title"]
-	if ok {
-		m.title = v.(string)
-	}
-	v, ok = r["description"]
-	if ok {
-		m.description = v.(string)
-	}
-	v, ok = r["releaseDate"]
-	if ok {
-		t, _ := time.Parse(defaultTimeLayout, v.(string))
-		m.releaseDate = t
-	}
-	v, ok = r["album"]
-	if ok {
-		m.album = v.(string)
-	}
-	v, ok = r["track"]
-	if ok {
-		m.track = v.(int)
-	}
+	return nil
 }
 
 // function record() creates a struct capable of being stored in the database.
 // defines type VideoMedia's implementation of the MediaRecord interface.
-func (m *VideoMedia) toRecord() *MediaRecord {
-	return &MediaRecord{
-		"absPath":         m.absPath,
-		"relPath":         m.relPath,
-		"size":            m.size,
-		"mode":            m.mode,
-		"timeModified":    m.timeModified,
-		"sysInfo":         m.sysInfo,
-		"kind":            m.kind,
-		"ext":             m.ext,
-		"extName":         m.extName,
-		"name":            m.name,
-		"timeAdded":       m.timeAdded,
-		"playbackCommand": m.playbackCommand,
-		"title":           m.title,
-		"description":     m.description,
-		"releaseDate":     m.releaseDate,
-		// video-specific fields
-		"knownSubtitles": m.knownSubtitles,
-		"subtitles":      m.subtitles,
+func (m *VideoMedia) toRecord() (*MediaRecord, *ReturnCode) {
+
+	var (
+		record *MediaRecord = &MediaRecord{}
+		data   []byte
+		err    error
+	)
+
+	if data, err = json.Marshal(m); nil != err {
+		return nil, rcInvalidJSONData.specf(
+			"toRecord(): json.Marshal(%s): cannot marshal VideoMedia struct into JSON object: %s", m, err)
 	}
+
+	if err = json.Unmarshal(data, record); nil != err {
+		return nil, rcInvalidJSONData.specf(
+			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into MediaRecord struct: %s", string(data), err)
+	}
+
+	return record, nil
 }
 
 // function fromRecord() creates a struct using the record stored in the
 // database. defines type VideoMedia's implementation of the MediaRecord
 // interface.
-func (m *VideoMedia) fromRecord(r MediaRecord) {
-
-	var (
-		v  interface{}
-		ok bool
-	)
+func (m *VideoMedia) fromRecord(data []byte) *ReturnCode {
 
 	// VideoMedia has an embedded Media struct -pointer- (not struct). so if we
 	// create a zeroized VideoMedia, the embedded Media will be a null pointer.
@@ -537,81 +460,11 @@ func (m *VideoMedia) fromRecord(r MediaRecord) {
 		m.Media = &Media{}
 	}
 
-	v, ok = r["absPath"]
-	if ok {
-		m.absPath = v.(string)
-	}
-	v, ok = r["relPath"]
-	if ok {
-		m.relPath = v.(string)
+	// unmarshal our media object directly into the target
+	if err := json.Unmarshal(data, m); nil != err {
+		return rcInvalidJSONData.specf(
+			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into VideoMedia struct: %s", string(data), err)
 	}
 
-	v, ok = r["size"]
-	if ok {
-		m.size = int64(v.(float64))
-	}
-	v, ok = r["mode"]
-	if ok {
-		m.mode = os.FileMode(v.(float64))
-	}
-	v, ok = r["timeModified"]
-	if ok {
-		t, _ := time.Parse(defaultTimeLayout, v.(string))
-		m.timeModified = t
-	}
-	v, ok = r["sysInfo"]
-	if ok {
-		m.sysInfo = v
-	}
-
-	v, ok = r["kind"]
-	if ok {
-		m.kind = MediaKind(v.(float64))
-	}
-	v, ok = r["ext"]
-	if ok {
-		m.ext = v.(string)
-	}
-	v, ok = r["extName"]
-	if ok {
-		m.extName = v.(string)
-	}
-	v, ok = r["name"]
-	if ok {
-		m.name = v.(string)
-	}
-	v, ok = r["timeAdded"]
-	if ok {
-		t, _ := time.Parse(defaultTimeLayout, v.(string))
-		m.timeAdded = t
-	}
-	v, ok = r["playbackCommand"]
-	if ok {
-		m.playbackCommand = v.(string)
-	}
-	v, ok = r["title"]
-	if ok {
-		m.title = v.(string)
-	}
-	v, ok = r["description"]
-	if ok {
-		m.description = v.(string)
-	}
-	v, ok = r["releaseDate"]
-	if ok {
-		t, _ := time.Parse(defaultTimeLayout, v.(string))
-		m.releaseDate = t
-	}
-	v, ok = r["knownSubtitles"]
-	if ok {
-		subs := []Subtitles{}
-		for _, s := range v.([]interface{}) {
-			subs = append(subs, s.(Subtitles))
-		}
-		m.knownSubtitles = subs
-	}
-	v, ok = r["subtitles"]
-	if ok {
-		//m.subtitles = v.(Subtitles)
-	}
+	return nil
 }

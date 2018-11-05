@@ -16,7 +16,6 @@ package main
 import (
 	"github.com/HouzuoGuo/tiedot/db"
 
-	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -246,10 +245,12 @@ func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (
 
 		// function seenFile() checks if the file specified by path and kind of
 		// media exists in the associated collection of this library's database.
-		seenFile := func(col *db.Col, path string) (bool, error) {
-			var query interface{}
-			json.Unmarshal([]byte(fmt.Sprintf(
-				`[{"eq": "%s", "in": ["%s"]}]`, path, mediaIndex[mxPath][0])), &query)
+		seenFile := func(lib *Library, kind MediaKind, path string) (bool, error) {
+			col := lib.db.col[kind]
+			query := map[string]interface{}{
+				"eq": path,
+				"in": []interface{}{mediaIndex[mxPath][0]},
+			}
 			result := make(map[int]struct{})
 			if err := db.EvalQuery(query, col, &result); nil != err {
 				return false, err
@@ -267,38 +268,52 @@ func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (
 		case mkAudio:
 
 			ac := l.db.col[mkAudio]
-			seen, err := seenFile(ac, absPath)
+			seen, err := seenFile(l, kind, absPath)
 			if err != nil {
 				return count, rcInvalidFile.specf(
 					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
 			}
-
 			if !seen {
 				audio := newAudioMedia(l, absPath, relPath, ext, extName, fileInfo)
-				count++
-				infoLog.tracef("discovered audio: %s", audio)
-				ac.Insert(*audio.toRecord())
-				if nil != sh && nil != sh.handleMedia {
-					sh.handleMedia(l, absPath, audio)
+				if rec, recErr := audio.toRecord(); nil == recErr {
+					if id, insErr := ac.Insert(*rec); nil == insErr {
+						count++
+						infoLog.tracef("discovered audio: %s", audio)
+						if nil != sh && nil != sh.handleMedia {
+							sh.handleMedia(l, absPath, audio, id)
+						}
+					} else {
+						return count, rcDatabaseError.specf(
+							"scanDive(%q, %d): failed to insert record: %s (skipping)", dispPath, depth, insErr)
+					}
+				} else {
+					return count, recErr
 				}
 			}
 
 		case mkVideo:
 
 			vc := l.db.col[mkVideo]
-			seen, err := seenFile(vc, absPath)
+			seen, err := seenFile(l, kind, absPath)
 			if err != nil {
 				return count, rcInvalidFile.specf(
 					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
 			}
-
 			if !seen {
 				video := newVideoMedia(l, absPath, relPath, ext, extName, fileInfo)
-				count++
-				infoLog.tracef("discovered video: %s", video)
-				vc.Insert(*video.toRecord())
-				if nil != sh && nil != sh.handleMedia {
-					sh.handleMedia(l, absPath, video)
+				if rec, recErr := video.toRecord(); nil == recErr {
+					if id, insErr := vc.Insert(*rec); nil == insErr {
+						count++
+						infoLog.tracef("discovered video: %s", video)
+						if nil != sh && nil != sh.handleMedia {
+							sh.handleMedia(l, absPath, video, id)
+						}
+					} else {
+						return count, rcDatabaseError.specf(
+							"scanDive(%q, %d): failed to insert record: %s (skipping)", dispPath, depth, insErr)
+					}
+				} else {
+					return count, recErr
 				}
 			}
 
@@ -385,16 +400,12 @@ func (l *Library) loadDive(kind MediaKind) (uint, *ReturnCode) {
 			switch kind {
 			case mkAudio:
 				audio := &AudioMedia{}
-				var query MediaRecord
-				json.Unmarshal(data, &query)
-				audio.fromRecord(query)
+				audio.fromRecord(data)
 				infoLog.tracef("loaded audio (ID = %d): %s", id, audio)
 
 			case mkVideo:
 				video := &VideoMedia{}
-				var query MediaRecord
-				json.Unmarshal(data, &query)
-				video.fromRecord(query)
+				video.fromRecord(data)
 				infoLog.tracef("loaded video (ID = %d): %s", id, video)
 
 			default:
