@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 const (
@@ -40,33 +41,24 @@ const (
 
 var (
 	// see type JSONDataConfig for a description of these items
-	defaultDBRecMaxSize = 1 * mebiBytes
-	defaultDBBufferSize = 4 * defaultDBRecMaxSize / runtime.NumCPU()
-	defaultDBBucketSize = 16
-	defaultDBHashGrowth = defaultDBRecMaxSize / 2 / runtime.NumCPU()
-	defaultDBHashedBits = 13
-	defaultDBNumBuckets = 8192
-)
-
-// variable colName maps the MediaKind enum values to the string name of their
-// corresponding collection in the database.
-var (
-	colName = [mkCOUNT]string{
-		"Audio", // 0 = mkAudio
-		"Video", // 1 = mkVideo
-	}
+	defaultMaxRecordSize  = 1 * mebiBytes
+	defaultDiskBufferSize = 4 * defaultMaxRecordSize / runtime.NumCPU()
+	defaultHashBucketSize = 16
+	defaultHashBufferSize = defaultMaxRecordSize / 2 / runtime.NumCPU()
+	defaultHashedBitsSize = 13
+	defaultNumHashBuckets = 8192
 )
 
 // type JSONDataConfig defines all of tiedot's configurable paramters for
 // initial index and cache sizes
 type JSONDataConfig struct {
-	options      *Options `json:"-"`              // not stored in the json data
-	DBRecMaxSize int      `json:"DocMaxRoom"`     // <=- maximum size of a single document that will ever be accepted into database.
-	DBBufferSize int      `json:"ColFileGrowth"`  // <=- size (in bytes) of each collection's pre-allocated files.
-	DBBucketSize int      `json:"PerBucket"`      // number of entries pre-allocated to each hash table bucket.
-	DBHashGrowth int      `json:"HTFileGrowth"`   // size (in bytes) to grow hash table file to fit in more entries.
-	DBHashedBits uint     `json:"HashBits"`       // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.
-	DBNumBuckets int      `json:"InitialBuckets"` // number of buckets initially allocated in a hash table file.
+	options        *Options `json:"-"`              // not stored in the json data
+	MaxRecordSize  int      `json:"DocMaxRoom"`     // <=- maximum size of a single document that will ever be accepted into database.
+	DiskBufferSize int      `json:"ColFileGrowth"`  // <=- size (in bytes) of each collection's pre-allocated files.
+	HashBucketSize int      `json:"PerBucket"`      // number of entries pre-allocated to each hash table bucket.
+	HashBufferSize int      `json:"HTFileGrowth"`   // size (in bytes) to grow hash table file to fit in more entries.
+	HashedBitsSize uint     `json:"HashBits"`       // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.
+	NumHashBuckets int      `json:"InitialBuckets"` // number of buckets initially allocated in a hash table file.
 }
 
 // creates a string representation of the Database for easy identification in
@@ -86,19 +78,19 @@ func newJSONDataConfig(opt *Options) (*JSONDataConfig, *ReturnCode) {
 			"newJSONDataConfig(): cannot encode JSON object: &Options{} is nil")
 	}
 
-	bits := uint(math.Log2(float64(opt.DBHashSize.int) / 512.0))
+	bits := uint(math.Log2(float64(opt.HashBufferSize.int) / 512.0))
 	buckets := 1 << bits
-	recordSizeMax := defaultDBRecMaxSize
-	bucketSize := defaultDBBucketSize
+	recordSizeMax := defaultMaxRecordSize
+	bucketSize := defaultHashBucketSize
 
 	return &JSONDataConfig{
-		options:      opt,
-		DBRecMaxSize: int(recordSizeMax),
-		DBBufferSize: opt.DBBufferSize.int,
-		DBBucketSize: int(bucketSize),
-		DBHashGrowth: opt.DBHashSize.int,
-		DBHashedBits: uint(bits),
-		DBNumBuckets: int(buckets),
+		options:        opt,
+		MaxRecordSize:  int(recordSizeMax),
+		DiskBufferSize: opt.DiskBufferSize.int,
+		HashBucketSize: int(bucketSize),
+		HashBufferSize: opt.HashBufferSize.int,
+		HashedBitsSize: uint(bits),
+		NumHashBuckets: int(buckets),
 	}, nil
 }
 
@@ -145,15 +137,32 @@ func (c *JSONDataConfig) equals(jdc *JSONDataConfig) (bool, []string) {
 	if c != jdc {
 		// these fields are the only options the user can specify on the command
 		// line. all other fields are calculated based on these.
-		if c.DBBufferSize != jdc.DBBufferSize {
-			uneq = append(uneq, c.options.DBBufferSize.name)
+		if c.DiskBufferSize != jdc.DiskBufferSize {
+			uneq = append(uneq, c.options.DiskBufferSize.name)
 		}
-		if c.DBHashGrowth != jdc.DBHashGrowth {
-			uneq = append(uneq, c.options.DBHashSize.name)
+		if c.HashBufferSize != jdc.HashBufferSize {
+			uneq = append(uneq, c.options.HashBufferSize.name)
 		}
 	}
 	return 0 == len(uneq), uneq
 }
+
+// variable mediaColName maps the MediaKind enum values to the string name of their
+// corresponding collection in the database.
+var (
+	mediaColName = [mkCOUNT]string{
+		"Audio", // 0 = mkAudio
+		"Video", // 1 = mkVideo
+	}
+)
+
+// variable supportColName maps the SupportKind enum values to the string name of their
+// corresponding collection in the database.
+var (
+	supportColName = [skCOUNT]string{
+		"Subtitles", // 0 = skSubtitles
+	}
+)
 
 // type Database represents an abstraction from the internal persistant storage
 // mechanism used for maintaining an index of all known libraries and their
@@ -164,14 +173,21 @@ type Database struct {
 	name    string // libPath checksum (name of database directory)
 	dataDir string // directory containing all known library databases
 
-	store      *db.DB           // interactive database object
-	col        [mkCOUNT]*db.Col // db collections referenced by MediaKind
-	numRecords [mkCOUNT]uint    // number of records in each collection
+	store           *db.DB           // interactive database object
+	mediaCol        [mkCOUNT]*db.Col // db collections referenced by MediaKind
+	mediaNumRecords [mkCOUNT]uint    // number of records in each media collection
+	supportCol      [skCOUNT]*db.Col // db collections referenced by SupportKind
+	timeCreated     time.Time        // only set if the db was newly created, else IsZero() will return true
 }
 
 // function newDatabase() creates a new high-level database object through
 // which all of the persistent storage operations should be performed.
 func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) {
+
+	// zeroized Time object is January 1, year 1, 00:00:00.000000000 UTC calling
+	// time.IsZero() will return true, alternatively calling
+	// (*Database).isFirstAppearance() on this object will return true.
+	timeCreated := time.Time{}
 
 	// compute an identifying checksum from the absolute path to the library,
 	// and use that to build a path to the database directory.
@@ -264,6 +280,7 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 		// this is an unknown library. we are creating the database for the
 		// first time and so need a database configuration file in json format
 		// written to the database directory.
+		timeCreated = time.Now()
 
 		// marshal the configuration struct into a json string for writing into
 		// the config file which is read by and used by the tiedot runtime.
@@ -303,13 +320,15 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 
 	// initialize the new struct object.
 	base := &Database{
-		absPath:    path,
-		libPath:    abs,
-		name:       sum,
-		dataDir:    dat,
-		store:      store,
-		col:        [mkCOUNT]*db.Col{},
-		numRecords: [mkCOUNT]uint{},
+		absPath:         path,
+		libPath:         abs,
+		name:            sum,
+		dataDir:         dat,
+		store:           store,
+		mediaCol:        [mkCOUNT]*db.Col{},
+		mediaNumRecords: [mkCOUNT]uint{},
+		supportCol:      [skCOUNT]*db.Col{},
+		timeCreated:     timeCreated,
 	}
 
 	// initialize the backing data store by creating the required collections;
@@ -340,13 +359,28 @@ func (d *Database) close() (bool, *ReturnCode) {
 	return true, nil
 }
 
+func (d *Database) isFirstAppearance() bool {
+	return !d.timeCreated.IsZero()
+}
+
 // function initialize() creates the required collections in the backing data
 // store. returns true on success, and returns false with a diagnostic
 // ReturnCode on failure.
 func (d *Database) initialize() (bool, *ReturnCode) {
 
-	// allocate name-collection map
-	//d.col = make(map[string]*db.Col, len(colName))
+	if _, err := d.initCollection(mediaColName[:], d.mediaCol[:], mediaIndex[:]); nil != err {
+		return false, err
+	}
+
+	if _, err := d.initCollection(supportColName[:], d.supportCol[:], supportIndex[:]); nil != err {
+		return false, err
+	}
+
+	return true, nil
+
+}
+
+func (d *Database) initCollection(colName []string, col []*db.Col, index []EntityIndex) (bool, *ReturnCode) {
 
 	// iterate over all required collection names
 	for kind, name := range colName {
@@ -362,11 +396,11 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 		}
 
 		// keep a reference to the collection handler
-		d.col[kind] = d.store.Use(name)
+		col[kind] = d.store.Use(name)
 
 		if !existed {
-			for _, idx := range mediaIndex {
-				if err := d.col[kind].Index(idx); nil != err {
+			for _, idx := range index {
+				if err := col[kind].Index(idx); nil != err {
 					return false, rcDatabaseError.specf(
 						"initialize(): %s: Index(%q): %s", d, name, err)
 				}
@@ -379,12 +413,12 @@ func (d *Database) initialize() (bool, *ReturnCode) {
 // function scrub() fixes corrupt records and defragments disk space used by the
 // database -- performed on all collections in the database.
 func (d *Database) scrub() {
-	for kind, name := range colName {
+	for kind, name := range mediaColName {
 		if d.store.ColExists(name) {
 			d.store.Scrub(name)
 		}
 		// after Scrub(), tiedot has potentially reallocated space elsewhere and
 		// the reference is probably no longer valid.
-		d.col[kind] = d.store.Use(name)
+		d.mediaCol[kind] = d.store.Use(name)
 	}
 }

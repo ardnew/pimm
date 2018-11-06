@@ -217,8 +217,8 @@ func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (
 		}
 
 		// recursively scan all of this subdirectory's contents.
+		var scanErr *ReturnCode
 		for _, name := range dirName {
-			var scanErr *ReturnCode
 			count, scanErr = l.scanDive(path.Join(absPath, name), depth+1, count, sh)
 			if nil != scanErr {
 				// a file/subdir of the current directory threw an error.
@@ -245,11 +245,24 @@ func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (
 
 		// function seenFile() checks if the file specified by path and kind of
 		// media exists in the associated collection of this library's database.
-		seenFile := func(lib *Library, kind MediaKind, path string) (bool, error) {
-			col := lib.db.col[kind]
-			query := map[string]interface{}{
-				"eq": path,
-				"in": []interface{}{mediaIndex[mxPath][0]},
+		seenFile := func(lib *Library, class EntityClass, kind int, path string) (bool, error) {
+
+			var col *db.Col
+			var query map[string]interface{}
+
+			switch class {
+			case ecMedia:
+				col = lib.db.mediaCol[kind]
+				query = map[string]interface{}{
+					"eq": path,
+					"in": []interface{}{mediaIndex[mxPath][0]},
+				}
+			case ecSupport:
+				col = lib.db.supportCol[kind]
+				query = map[string]interface{}{
+					"eq": path,
+					"in": []interface{}{supportIndex[sxPath][0]},
+				}
 			}
 			result := make(map[int]struct{})
 			if err := db.EvalQuery(query, col, &result); nil != err {
@@ -267,8 +280,8 @@ func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (
 		switch kind, extName := mediaKindOfFileExt(ext); kind {
 		case mkAudio:
 
-			ac := l.db.col[mkAudio]
-			seen, err := seenFile(l, kind, absPath)
+			ac := l.db.mediaCol[mkAudio]
+			seen, err := seenFile(l, ecMedia, int(kind), absPath)
 			if err != nil {
 				return count, rcInvalidFile.specf(
 					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
@@ -293,8 +306,8 @@ func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (
 
 		case mkVideo:
 
-			vc := l.db.col[mkVideo]
-			seen, err := seenFile(l, kind, absPath)
+			vc := l.db.mediaCol[mkVideo]
+			seen, err := seenFile(l, ecMedia, int(kind), absPath)
 			if err != nil {
 				return count, rcInvalidFile.specf(
 					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
@@ -320,15 +333,29 @@ func (l *Library) scanDive(absPath string, depth, count uint, sh *ScanHandler) (
 		default:
 			// doesn't have an extension typically associated with media files.
 			// check if it is a media-supporting file.
-			switch kind, extName := mediaSupportKindOfFileExt(ext); kind {
-			case mskSubtitles:
-				// TODO: add subs to collection of all subtitles available for
-				//       association with a video media.
-
-				//infoLog.tracef("discovered subtitles: %q: %s (%s)", absPath, extName, ext)
-
-				if nil != sh && nil != sh.handleAux {
-					sh.handleAux(l, absPath, mskSubtitles, ext, extName, fileInfo, absPath)
+			switch kind, extName := supportKindOfFileExt(ext); kind {
+			case skSubtitles:
+				sc := l.db.supportCol[skSubtitles]
+				seen, err := seenFile(l, ecSupport, int(kind), absPath)
+				if err != nil {
+					return count, rcInvalidFile.specf(
+						"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
+				}
+				if !seen {
+					subs := newSubtitles(l, absPath, relPath, ext, extName, fileInfo)
+					if rec, recErr := subs.toRecord(); nil == recErr {
+						if id, insErr := sc.Insert(*rec); nil == insErr {
+							infoLog.tracef("discovered subtitles: %s", subs)
+							if nil != sh && nil != sh.handleAux {
+								sh.handleAux(l, absPath, skSubtitles, subs, id)
+							}
+						} else {
+							return count, rcDatabaseError.specf(
+								"scanDive(%q, %d): failed to insert record: %s (skipping)", dispPath, depth, insErr)
+						}
+					} else {
+						return count, recErr
+					}
 				}
 
 			default:
@@ -388,31 +415,48 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 			"scan(): max number of scanners reached: %q (max = %d)",
 			l.absPath, maxLibraryScanners)
 	}
-	l.scanComplete <- true
 	return err
 }
 
-func (l *Library) loadDive(kind MediaKind) (uint, *ReturnCode) {
+func (l *Library) loadDive(class EntityClass, kind int) (uint, *ReturnCode) {
 
 	var count uint = 0
-	l.db.col[kind].ForEachDoc(
-		func(id int, data []byte) (willMoveOn bool) {
-			switch kind {
-			case mkAudio:
-				audio := &AudioMedia{}
-				audio.fromRecord(data)
-				infoLog.tracef("loaded audio (ID = %d): %s", id, audio)
 
-			case mkVideo:
-				video := &VideoMedia{}
-				video.fromRecord(data)
-				infoLog.tracef("loaded video (ID = %d): %s", id, video)
+	switch class {
+	case ecMedia:
+		l.db.mediaCol[kind].ForEachDoc(
+			func(id int, data []byte) (willMoveOn bool) {
+				switch MediaKind(kind) {
+				case mkAudio:
+					audio := &AudioMedia{}
+					audio.fromRecord(data)
+					infoLog.tracef("loaded audio (ID = %d): %s", id, audio)
+				case mkVideo:
+					video := &VideoMedia{}
+					video.fromRecord(data)
+					infoLog.tracef("loaded video (ID = %d): %s", id, video)
+				default:
+				}
+				count++
+				return true // move on to the next document OR
+			})
 
-			default:
-			}
-			count++
-			return true // move on to the next document OR
-		})
+	case ecSupport:
+		l.db.supportCol[kind].ForEachDoc(
+			func(id int, data []byte) (willMoveOn bool) {
+				switch SupportKind(kind) {
+				case skSubtitles:
+					subs := &Subtitles{}
+					subs.fromRecord(data)
+					infoLog.tracef("loaded subtitles (ID = %d): %s", id, subs)
+				default:
+				}
+				count++
+				return true // move on to the next document OR
+			})
+	default:
+	}
+
 	return count, nil
 }
 
@@ -422,9 +466,11 @@ func (l *Library) loadDive(kind MediaKind) (uint, *ReturnCode) {
 func (l *Library) load() *ReturnCode {
 
 	var (
-		total uint = 0 // number of -existing- files loaded from database
-		count      = [mkCOUNT]uint{0, 0}
-		err   *ReturnCode
+		mediaTotal   uint = 0 // number of -existing-loaded from database
+		supportTotal uint = 0 // ditto
+		mediaCount        = [mkCOUNT]uint{0, 0}
+		supportCount      = [skCOUNT]uint{0}
+		err          *ReturnCode
 	)
 
 	//
@@ -446,18 +492,26 @@ func (l *Library) load() *ReturnCode {
 		// notified to the user.
 		infoLog.verbosef("loading: %q", l.name)
 
-		for k := range colName {
-			count[k], err = l.loadDive(MediaKind(k))
+		for k := range mediaColName {
+			mediaCount[k], err = l.loadDive(ecMedia, k)
 			if nil != err {
 				return err
 			}
-			total += count[k]
+			mediaTotal += mediaCount[k]
+		}
+
+		for k := range supportColName {
+			supportCount[k], err = l.loadDive(ecSupport, k)
+			if nil != err {
+				return err
+			}
+			supportTotal += supportCount[k]
 		}
 
 		l.loadElapsed = time.Since(<-l.loadStart)
 		infoLog.verbosef(
-			"finished loading: %q (%d media files in %s)",
-			l.name, total, l.loadElapsed.Round(time.Millisecond))
+			"finished loading: %q (%d media files, %d support files in %s)",
+			l.name, mediaTotal, supportTotal, l.loadElapsed.Round(time.Millisecond))
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
@@ -467,6 +521,5 @@ func (l *Library) load() *ReturnCode {
 			"load(): max number of loaders reached: %q (max = %d)",
 			l.absPath, maxLibraryScanners)
 	}
-	l.loadComplete <- true
 	return err
 }

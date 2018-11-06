@@ -23,67 +23,23 @@ import (
 	"time"
 )
 
-//
-// TODO: add tags in Media struct to define which fields are indexed in the
-//       database, and then dynamically create the index construction/queries
-//       (in (*Database).initialize(), (*Library).seenFile(), etc.) accordingly.
-//
-type MediaIndex []string
-type MediaIndexID int
+// type EntityClass is an enum identifying the different types of file entities
+// stored in the persistent database.
+type EntityClass int
 
+// concrete values of the EntityClass enum type.
 const (
-	mxPath MediaIndexID = iota
-	mxCOUNT
+	ecUnknown EntityClass = iota - 1 // = -1
+	ecMedia                          // =  0
+	ecSupport                        // =  1
+	ecCOUNT                          // =  2
 )
 
-var (
-	mediaIndex = [mxCOUNT]MediaIndex{
-		MediaIndex{"AbsPath"}, // = mxPath (0)
-	}
-)
-
-// type Media is used to reference every kind of playable media -- the struct
-// fields are common among both audio and video.
-type Media struct {
-	// fixed, read-only system info
-	AbsPath      string      // absolute path to media file
-	RelPath      string      // CWD-relative path to media file
-	Size         int64       // length in bytes for regular files; system-dependent for others
-	Mode         os.FileMode // file mode bits
-	TimeModified time.Time   // modification time
-	SysInfo      interface{} // underlying data source (can return nil)
-	Kind         MediaKind   // type of media
-	Ext          string      // file name extension
-	ExtName      string      // name of file type/encoding (per file name extension)
-	// user-writable system info
-	Name            string    // displayed name
-	TimeAdded       time.Time // date media was discovered and added to library
-	PlaybackCommand string    // full system command used to play media
-	// user-writable public media info
-	Title       string    // official name of media
-	Description string    // synopsis/summary of media content
-	ReleaseDate time.Time // date media was produced/released
-}
-
-// type AudioMedia is a specialized type of media containing struct fields
-// relevant only to video.
-type AudioMedia struct {
-	*Media
-	Album string // name of the album on which the track appears
-	Track int64  // numbered index of where track is located on album
-}
-
-// type VideoMedia is a specialized type of media containing struct fields
-// relevant only to audio.
-type VideoMedia struct {
-	*Media
-	KnownSubtitles []Subtitles // absolute path to all associated subtitles
-	Subtitles      Subtitles   // absolute path to selected subtitles
-}
-
-// TODO: type Subtitles contains all of the important information needed to
-//       associate a subtitles file with a given Media object.
-type Subtitles struct {
+// type Entity is used to describe any sort of file encountered on the file
+// system. this includes not just audio/video media, but also subtitles and any
+// other auxiliary data files.
+type Entity struct {
+	Class        EntityClass // type of entity
 	AbsPath      string      // absolute path to media file
 	RelPath      string      // CWD-relative path to media file
 	Size         int64       // length in bytes for regular files; system-dependent for others
@@ -94,15 +50,33 @@ type Subtitles struct {
 	ExtName      string      // name of file type/encoding (per file name extension)
 }
 
-// type MediaRecord represents the struct stored in the database for an
+// type EntityRecord represents the struct stored in the database for an
 // individual media record
-type MediaRecord map[string]interface{}
+type EntityRecord map[string]interface{}
+type EntityIndex []string
 
-// type StorableMedia defines the methods necessary to store and retrieve a
-// Media record from the database.
-type StorableMedia interface {
-	toRecord() (*MediaRecord, *ReturnCode) // creates a struct capable of being stored in the database.
-	fromRecord([]byte) *ReturnCode         // creates a struct using the record stored in the database.
+func newEntity(lib *Library, class EntityClass, absPath, relPath, ext, extName string, info os.FileInfo) *Entity {
+
+	return &Entity{
+		Class:        class,          // (EntityClass) type of entity
+		AbsPath:      absPath,        // (string)      absolute path to media file
+		RelPath:      relPath,        // (string)      CWD-relative path to media file
+		Size:         info.Size(),    // (int64)       length in bytes for regular files; system-dependent for others
+		Mode:         info.Mode(),    // (os.FileMode) file mode bits
+		TimeModified: info.ModTime(), // (time.Time)   modification time
+		SysInfo:      info.Sys(),     // (interface{}) underlying data source (can return nil)
+		Ext:          ext,            // (string)      file name extension
+		ExtName:      extName,        // (string)      name of file type/encoding (per file name extension)
+	}
+}
+
+func (e *Entity) String() string {
+	path := e.AbsPath
+	if "" != e.RelPath && len(e.RelPath) < len(e.AbsPath) {
+		path = e.RelPath
+	}
+	return fmt.Sprintf("%s [%s (%s)] (%d bytes) %v",
+		path, e.ExtName, e.Ext, e.Size, e.TimeModified)
 }
 
 // type MediaKind is an enum identifying the different supported types of
@@ -117,55 +91,108 @@ const (
 	mkCOUNT                        // =  2
 )
 
-// type MediaSupportKind is an enum identifying different types of files that
-// support media in some way. these files should somehow be associated with the
-// media files; they are not useful on their own.
-type MediaSupportKind int
+// type Media is used to reference every kind of playable media -- the struct
+// fields are common among both audio and video.
+type Media struct {
+	// fixed, read-only system info
+	*Entity           // common entity info
+	Kind    MediaKind // type of media
+	// user-writable system info
+	Name            string    // displayed name
+	TimeAdded       time.Time // date media was discovered and added to library
+	PlaybackCommand string    // full system command used to play media
+	// user-writable public media info
+	Title       string    // official name of media
+	Description string    // synopsis/summary of media content
+	ReleaseDate time.Time // date media was produced/released
+}
 
-// concrete values of the MediaSupportKind enum type
+// type AudioMedia is a specialized type of media containing struct fields
+// relevant only to video.
+type AudioMedia struct {
+	*Media        // common media info
+	Album  string // name of the album on which the track appears
+	Track  int64  // numbered index of where track is located on album
+}
+
+// type VideoMedia is a specialized type of media containing struct fields
+// relevant only to audio.
+type VideoMedia struct {
+	*Media                     // common media info
+	KnownSubtitles []Subtitles // absolute path to all associated subtitles
+	Subtitles      Subtitles   // absolute path to selected subtitles
+}
+
+type MediaIndexID int
+
 const (
-	mskUnknown   MediaSupportKind = iota - 1 // = -1
-	mskSubtitles                             // =  0
+	mxPath MediaIndexID = iota
+	mxCOUNT
+)
+
+var (
+	mediaIndex = [mxCOUNT]EntityIndex{
+		EntityIndex{"AbsPath"}, // = mxPath (0)
+	}
+)
+
+// type SupportKind is an enum identifying different types of files that support
+// media in some way. these files should somehow be associated with the media
+// files; they are not useful on their own.
+type SupportKind int
+
+// concrete values of the SupportKind enum type
+const (
+	skUnknown   SupportKind = iota - 1 // = -1
+	skSubtitles                        // =  0
+	skCOUNT                            // =  1
+)
+
+type Support struct {
+	*Entity             // common entity info
+	Kind    SupportKind // type of support file
+}
+
+type Subtitles struct {
+	*Support // common support info
+}
+
+type SupportIndexID int
+
+const (
+	sxPath SupportIndexID = iota
+	sxCOUNT
+)
+
+var (
+	supportIndex = [mxCOUNT]EntityIndex{
+		EntityIndex{"AbsPath"}, // = mxPath (0)
+	}
 )
 
 // function newMedia() creates and initializes a new Media object. the kind
 // of media is determined automatically, and the MediaKind field is set
 // accordingly. so once the media has been identified, a type assertion can be
 // performed to handle the object appropriately and unambiguously.
-func newMedia(lib *Library, absPath, relPath string, kind MediaKind, ext, extName string, info os.FileInfo) *Media {
+func newMedia(lib *Library, kind MediaKind, absPath, relPath, ext, extName string, info os.FileInfo) *Media {
+
+	entity := newEntity(lib, ecMedia, absPath, relPath, ext, extName, info)
 
 	return &Media{
-		AbsPath:         absPath,        // (string)      absolute path to media file
-		RelPath:         relPath,        // (string)      CWD-relative path to media file
-		Size:            info.Size(),    // (int64)       length in bytes for regular files; system-dependent for others
-		Mode:            info.Mode(),    // (os.FileMode) file mode bits
-		TimeModified:    info.ModTime(), // (time.Time)   modification time
-		SysInfo:         info.Sys(),     // (interface{}) underlying data source (can return nil)
-		Kind:            kind,           // (MediaKind)   type of media
-		Ext:             ext,            // (string)      file name extension
-		ExtName:         extName,        // (string)      name of file type/encoding (per file name extension)
-		Name:            info.Name(),    // (string)      displayed name
-		TimeAdded:       time.Now(),     // (time.Time)   date media was discovered and added to library
-		PlaybackCommand: "--",           // (string)      full system command used to play media
-		Title:           info.Name(),    // (string)      official name of media
-		Description:     "--",           // (string)      synopsis/summary of media content
-		ReleaseDate:     time.Time{},    // (time.Time)   date media was produced/released
+		Entity:          entity,      // (*Entity)   common entity info
+		Kind:            kind,        // (MediaKind) type of media
+		Name:            info.Name(), // (string)    displayed name
+		TimeAdded:       time.Now(),  // (time.Time) date media was discovered and added to library
+		PlaybackCommand: "--",        // (string)    full system command used to play media
+		Title:           info.Name(), // (string)    official name of media
+		Description:     "--",        // (string)    synopsis/summary of media content
+		ReleaseDate:     time.Time{}, // (time.Time) date media was produced/released
 	}
-}
-
-// creates a string representation of the Media for easy identification in logs.
-func (m *Media) String() string {
-	path := m.AbsPath
-	if "" != m.RelPath && len(m.RelPath) < len(m.AbsPath) {
-		path = m.RelPath
-	}
-	return fmt.Sprintf("%s [%s (%s)] (%d bytes) %v",
-		path, m.ExtName, m.Ext, m.Size, m.TimeModified)
 }
 
 func newAudioMedia(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *AudioMedia {
 
-	media := newMedia(lib, absPath, relPath, mkAudio, ext, extName, info)
+	media := newMedia(lib, mkAudio, absPath, relPath, ext, extName, info)
 
 	return &AudioMedia{
 		Media: media, // common media info
@@ -176,7 +203,7 @@ func newAudioMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 
 func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *VideoMedia {
 
-	media := newMedia(lib, absPath, relPath, mkVideo, ext, extName, info)
+	media := newMedia(lib, mkVideo, absPath, relPath, ext, extName, info)
 
 	return &VideoMedia{
 		Media:          media,         // common media info
@@ -185,16 +212,22 @@ func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 	}
 }
 
+func newSupport(lib *Library, kind SupportKind, absPath, relPath, ext, extName string, info os.FileInfo) *Support {
+
+	entity := newEntity(lib, ecSupport, absPath, relPath, ext, extName, info)
+
+	return &Support{
+		Entity: entity, // (*Entity)     common entity info
+		Kind:   kind,   // (SupportKind) type of support file
+	}
+}
+
 func newSubtitles(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *Subtitles {
+
+	support := newSupport(lib, skSubtitles, absPath, relPath, ext, extName, info)
+
 	return &Subtitles{
-		AbsPath:      absPath,        // absolute path to media file
-		RelPath:      relPath,        // CWD-relative path to media file
-		Size:         info.Size(),    // length in bytes for regular files; system-dependent for others
-		Mode:         info.Mode(),    // file mode bits
-		TimeModified: info.ModTime(), // modification time
-		SysInfo:      info.Sys(),     // underlying data source (can return nil)
-		Ext:          ext,            // file name extension
-		ExtName:      extName,        // name of file type/encoding (per file name extension)
+		Support: support, // common support info
 	}
 }
 
@@ -324,16 +357,16 @@ func mediaKindOfFileExt(ext string) (MediaKind, string) {
 	return mkUnknown, ""
 }
 
-// type MediaSupportExt is a struct pairing MediaSupportKind values to their
-// corresponding ExtTable map.
-type MediaSupportExt struct {
-	kind  MediaSupportKind
+// type SupportExt is a struct pairing SupportKind values to their corresponding
+// ExtTable map.
+type SupportExt struct {
+	kind  SupportKind
 	table *ExtTable
 }
 
 var (
-	subsExt = MediaSupportExt{
-		kind: mskSubtitles,
+	subsExt = SupportExt{
+		kind: skSubtitles,
 		table: &ExtTable{
 			"AQTitle":                    []string{".aqt"},
 			"CVD":                        []string{".cvd"},
@@ -361,30 +394,30 @@ var (
 	}
 )
 
-// function mediaSupportKindOfFileExt() searches all MediaSupportExt mappings
-// for a given file name extension, returning both the MediaSupportKind and the
-// type/encoding name associated with that file name extension.
-func mediaSupportKindOfFileExt(ext string) (MediaSupportKind, string) {
+// function supportKindOfFileExt() searches all SupportExt mappings for a given
+// file name extension, returning both the SupportKind and the type/encoding
+// name associated with that file name extension.
+func supportKindOfFileExt(ext string) (SupportKind, string) {
 
 	// constant values in file extension tables are all lowercase. convert the
 	// search key to lowercase for case-insensitivity.
 	extLower := strings.ToLower(ext)
 
 	// iter: all supported kinds of media
-	for _, m := range []MediaSupportExt{subsExt} {
+	for _, m := range []SupportExt{subsExt} {
 		if n, ok := kindOfFileExt(m.table, extLower); ok {
 			return m.kind, n
 		}
 	}
-	return mskUnknown, ""
+	return skUnknown, ""
 }
 
-// function record() creates a struct capable of being stored in the database.
-// defines type AudioMedia's implementation of the MediaRecord interface.
-func (m *AudioMedia) toRecord() (*MediaRecord, *ReturnCode) {
+// function toRecord() creates a struct capable of being stored in the database.
+// defines type AudioMedia's implementation of the EntityRecord interface.
+func (m *AudioMedia) toRecord() (*EntityRecord, *ReturnCode) {
 
 	var (
-		record *MediaRecord = &MediaRecord{}
+		record *EntityRecord = &EntityRecord{}
 		data   []byte
 		err    error
 	)
@@ -396,14 +429,14 @@ func (m *AudioMedia) toRecord() (*MediaRecord, *ReturnCode) {
 
 	if err = json.Unmarshal(data, record); nil != err {
 		return nil, rcInvalidJSONData.specf(
-			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into MediaRecord struct: %s", string(data), err)
+			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into EntityRecord struct: %s", string(data), err)
 	}
 
 	return record, nil
 }
 
 // function fromRecord() creates a struct using the record stored in the
-// database. defines type AudioMedia's implementation of the MediaRecord
+// database. defines type AudioMedia's implementation of the EntityRecord
 // interface.
 func (m *AudioMedia) fromRecord(data []byte) *ReturnCode {
 
@@ -424,12 +457,12 @@ func (m *AudioMedia) fromRecord(data []byte) *ReturnCode {
 	return nil
 }
 
-// function record() creates a struct capable of being stored in the database.
-// defines type VideoMedia's implementation of the MediaRecord interface.
-func (m *VideoMedia) toRecord() (*MediaRecord, *ReturnCode) {
+// function toRecord() creates a struct capable of being stored in the database.
+// defines type VideoMedia's implementation of the EntityRecord interface.
+func (m *VideoMedia) toRecord() (*EntityRecord, *ReturnCode) {
 
 	var (
-		record *MediaRecord = &MediaRecord{}
+		record *EntityRecord = &EntityRecord{}
 		data   []byte
 		err    error
 	)
@@ -441,14 +474,14 @@ func (m *VideoMedia) toRecord() (*MediaRecord, *ReturnCode) {
 
 	if err = json.Unmarshal(data, record); nil != err {
 		return nil, rcInvalidJSONData.specf(
-			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into MediaRecord struct: %s", string(data), err)
+			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into EntityRecord struct: %s", string(data), err)
 	}
 
 	return record, nil
 }
 
 // function fromRecord() creates a struct using the record stored in the
-// database. defines type VideoMedia's implementation of the MediaRecord
+// database. defines type VideoMedia's implementation of the EntityRecord
 // interface.
 func (m *VideoMedia) fromRecord(data []byte) *ReturnCode {
 
@@ -464,6 +497,51 @@ func (m *VideoMedia) fromRecord(data []byte) *ReturnCode {
 	if err := json.Unmarshal(data, m); nil != err {
 		return rcInvalidJSONData.specf(
 			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into VideoMedia struct: %s", string(data), err)
+	}
+
+	return nil
+}
+
+// function toRecord() creates a struct capable of being stored in the database.
+// defines type Subtitles's implementation of the EntityRecord interface.
+func (m *Subtitles) toRecord() (*EntityRecord, *ReturnCode) {
+
+	var (
+		record *EntityRecord = &EntityRecord{}
+		data   []byte
+		err    error
+	)
+
+	if data, err = json.Marshal(m); nil != err {
+		return nil, rcInvalidJSONData.specf(
+			"toRecord(): json.Marshal(%s): cannot marshal Subtitles struct into JSON object: %s", m, err)
+	}
+
+	if err = json.Unmarshal(data, record); nil != err {
+		return nil, rcInvalidJSONData.specf(
+			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into EntityRecord struct: %s", string(data), err)
+	}
+
+	return record, nil
+}
+
+// function fromRecord() creates a struct using the record stored in the
+// database. defines type Subtitles's implementation of the EntityRecord
+// interface.
+func (m *Subtitles) fromRecord(data []byte) *ReturnCode {
+
+	// Subtitles has an embedded Support struct -pointer- (not struct). so if we
+	// create a zeroized Subtitles, the embedded Support will be a null pointer.
+	// we can protect this method from that null pointer by creating a zeroized
+	// Support and updating Subtitles's embedded pointer to reference it.
+	if nil == m.Support {
+		m.Support = &Support{}
+	}
+
+	// unmarshal our media object directly into the target
+	if err := json.Unmarshal(data, m); nil != err {
+		return rcInvalidJSONData.specf(
+			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into Subtitles struct: %s", string(data), err)
 	}
 
 	return nil

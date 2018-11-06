@@ -86,8 +86,8 @@ type Options struct {
 	Config    *Option // defines path to config file
 	LibData   *Option // defines data directory path (where to store databases)
 
-	DBBufferSize *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
-	DBHashSize   *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
+	DiskBufferSize *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
+	HashBufferSize *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
 }
 
 // function configDir() constructs the full path to the directory containing all
@@ -192,21 +192,18 @@ func main() {
 	if 0 == len(library) {
 		errLog.die(rcInvalidConfig.spec("no valid libraries provided"), false)
 	}
-	infoLog.log("initialization complete")
 
 	// -------------------------------------------------------------------------
 
-	infoLog.log("scanning libraries ...")
-	scanStart := time.Now()
-
 	// libraries ready, spool up the library scanners.
+	scanStart := time.Now()
 	populateLibrary(options, library)
 
 	for _, l := range library {
 		<-l.scanComplete
 	}
 	scanElapsed := time.Since(scanStart)
-	infoLog.logf("scan complete (%s)", scanElapsed.Round(time.Millisecond))
+	infoLog.logf("initialization complete (%s)", scanElapsed.Round(time.Millisecond))
 
 	infoLog.die(rcOK.spec(greeting()), false)
 }
@@ -220,11 +217,11 @@ func (o *Options) providedDBConfig() (bool, []string) {
 	list := []string{}
 	provided := false
 
-	if d, ok := o.Provided[o.DBBufferSize.name]; ok {
+	if d, ok := o.Provided[o.DiskBufferSize.name]; ok {
 		list = append(list, d.name)
 		provided = true
 	}
-	if d, ok := o.Provided[o.DBHashSize.name]; ok {
+	if d, ok := o.Provided[o.HashBufferSize.name]; ok {
 		list = append(list, d.name)
 		provided = true
 	}
@@ -288,25 +285,25 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage:  "path to library data directory (database storage location)",
 			string: libDataPath,
 		},
-		DBBufferSize: &Option{
-			name:  "dbbuffersize",
+		DiskBufferSize: &Option{
+			name:  "diskbuffersize",
 			usage: "size (in bytes) of each library's preallocated on-disk buffers (number of buffers = number of CPU cores)\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
-			int:   defaultDBBufferSize,
+			int:   defaultDiskBufferSize,
 		},
-		DBHashSize: &Option{
-			name:  "dbhashsize",
+		HashBufferSize: &Option{
+			name:  "hashbuffersize",
 			usage: "size (in bytes) by which each hash table will grow to make room once it reaches capacity\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
-			int:   defaultDBHashGrowth,
+			int:   defaultHashBufferSize,
 		},
 	}
 	knownOptions := NamedOption{
-		"help":         options.UsageHelp,
-		"verbose":      options.Verbose,
-		"trace":        options.Trace,
-		"config":       options.Config,
-		"libdata":      options.LibData,
-		"dbbuffersize": options.DBBufferSize,
-		"dbhashsize":   options.DBHashSize,
+		"help":           options.UsageHelp,
+		"verbose":        options.Verbose,
+		"trace":          options.Trace,
+		"config":         options.Config,
+		"libdata":        options.LibData,
+		"diskbuffersize": options.DiskBufferSize,
+		"hashbuffersize": options.HashBufferSize,
 	}
 
 	// register the command line options we want to handle.
@@ -315,8 +312,8 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
 	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
-	options.IntVar(&options.DBBufferSize.int, options.DBBufferSize.name, options.DBBufferSize.int, options.DBBufferSize.usage)
-	options.IntVar(&options.DBHashSize.int, options.DBHashSize.name, options.DBHashSize.int, options.DBHashSize.usage)
+	options.IntVar(&options.DiskBufferSize.int, options.DiskBufferSize.name, options.DiskBufferSize.int, options.DiskBufferSize.usage)
+	options.IntVar(&options.HashBufferSize.int, options.HashBufferSize.name, options.HashBufferSize.int, options.HashBufferSize.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
 	// display our own.
@@ -407,10 +404,13 @@ func populateLibrary(options *Options, library []*Library) {
 		// 2. pull all of the media already known to exist in the library from
 		//  the local database, verify it still exists, then notify the channel.
 		go func(l *Library) {
-			loadErr := l.load()
-			if nil != loadErr {
-				errLog.verbose(loadErr)
+			if !l.db.isFirstAppearance() {
+				loadErr := l.load()
+				if nil != loadErr {
+					errLog.verbose(loadErr)
+				}
 			}
+			l.loadComplete <- true
 		}(lib)
 
 		// 3. recursively walks a library's file system, notifying the library's
@@ -447,6 +447,7 @@ func populateLibrary(options *Options, library []*Library) {
 			if nil != scanErr {
 				errLog.verbose(scanErr)
 			}
+			l.scanComplete <- true
 		}(lib)
 	}
 
