@@ -44,7 +44,6 @@ const (
 // type LogID is an enum identifying the different kinds of built-in loggers.
 type LogID int
 
-// unexported constant values of the LogID enum type.
 const (
 	liRaw LogID = iota
 	liInfo

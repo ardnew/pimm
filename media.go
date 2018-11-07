@@ -17,78 +17,29 @@ import (
 	//"github.com/davecgh/go-spew/spew"
 
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"time"
 )
 
-// type EntityClass is an enum identifying the different types of file entities
-// stored in the persistent database.
-type EntityClass int
-
-// concrete values of the EntityClass enum type.
-const (
-	ecUnknown EntityClass = iota - 1 // = -1
-	ecMedia                          // =  0
-	ecSupport                        // =  1
-	ecCOUNT                          // =  2
-)
-
-// type Entity is used to describe any sort of file encountered on the file
-// system. this includes not just audio/video media, but also subtitles and any
-// other auxiliary data files.
-type Entity struct {
-	Class        EntityClass // type of entity
-	AbsPath      string      // absolute path to media file
-	RelPath      string      // CWD-relative path to media file
-	Size         int64       // length in bytes for regular files; system-dependent for others
-	Mode         os.FileMode // file mode bits
-	TimeModified time.Time   // modification time
-	SysInfo      interface{} // underlying data source (can return nil)
-	Ext          string      // file name extension
-	ExtName      string      // name of file type/encoding (per file name extension)
-}
-
-// type EntityRecord represents the struct stored in the database for an
-// individual media record
-type EntityRecord map[string]interface{}
-type EntityIndex []string
-
-func newEntity(lib *Library, class EntityClass, absPath, relPath, ext, extName string, info os.FileInfo) *Entity {
-
-	return &Entity{
-		Class:        class,          // (EntityClass) type of entity
-		AbsPath:      absPath,        // (string)      absolute path to media file
-		RelPath:      relPath,        // (string)      CWD-relative path to media file
-		Size:         info.Size(),    // (int64)       length in bytes for regular files; system-dependent for others
-		Mode:         info.Mode(),    // (os.FileMode) file mode bits
-		TimeModified: info.ModTime(), // (time.Time)   modification time
-		SysInfo:      info.Sys(),     // (interface{}) underlying data source (can return nil)
-		Ext:          ext,            // (string)      file name extension
-		ExtName:      extName,        // (string)      name of file type/encoding (per file name extension)
-	}
-}
-
-func (e *Entity) String() string {
-	path := e.AbsPath
-	if "" != e.RelPath && len(e.RelPath) < len(e.AbsPath) {
-		path = e.RelPath
-	}
-	return fmt.Sprintf("%s [%s (%s)] (%d bytes) %v",
-		path, e.ExtName, e.Ext, e.Size, e.TimeModified)
-}
-
 // type MediaKind is an enum identifying the different supported types of
 // playable media.
 type MediaKind int
 
-// concrete values of the MediaKind enum type.
 const (
 	mkUnknown MediaKind = iota - 1 // = -1
 	mkAudio                        // =  0
 	mkVideo                        // =  1
 	mkCOUNT                        // =  2
+)
+
+// variable mediaColName maps the MediaKind enum values to the string name of
+// their corresponding collection in the database.
+var (
+	mediaColName = [mkCOUNT]string{
+		"Audio", // 0 = mkAudio
+		"Video", // 1 = mkVideo
+	}
 )
 
 // type Media is used to reference every kind of playable media -- the struct
@@ -131,42 +82,8 @@ const (
 )
 
 var (
-	mediaIndex = [mxCOUNT]EntityIndex{
-		EntityIndex{"AbsPath"}, // = mxPath (0)
-	}
-)
-
-// type SupportKind is an enum identifying different types of files that support
-// media in some way. these files should somehow be associated with the media
-// files; they are not useful on their own.
-type SupportKind int
-
-// concrete values of the SupportKind enum type
-const (
-	skUnknown   SupportKind = iota - 1 // = -1
-	skSubtitles                        // =  0
-	skCOUNT                            // =  1
-)
-
-type Support struct {
-	*Entity             // common entity info
-	Kind    SupportKind // type of support file
-}
-
-type Subtitles struct {
-	*Support // common support info
-}
-
-type SupportIndexID int
-
-const (
-	sxPath SupportIndexID = iota
-	sxCOUNT
-)
-
-var (
-	supportIndex = [mxCOUNT]EntityIndex{
-		EntityIndex{"AbsPath"}, // = mxPath (0)
+	mediaIndex = [mxCOUNT]*EntityIndex{
+		&EntityIndex{"AbsPath"}, // = mxPath (0)
 	}
 )
 
@@ -210,47 +127,6 @@ func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 		KnownSubtitles: []Subtitles{}, // absolute path to all associated subtitles
 		Subtitles:      Subtitles{},   // absolute path to selected subtitles
 	}
-}
-
-func newSupport(lib *Library, kind SupportKind, absPath, relPath, ext, extName string, info os.FileInfo) *Support {
-
-	entity := newEntity(lib, ecSupport, absPath, relPath, ext, extName, info)
-
-	return &Support{
-		Entity: entity, // (*Entity)     common entity info
-		Kind:   kind,   // (SupportKind) type of support file
-	}
-}
-
-func newSubtitles(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *Subtitles {
-
-	support := newSupport(lib, skSubtitles, absPath, relPath, ext, extName, info)
-
-	return &Subtitles{
-		Support: support, // common support info
-	}
-}
-
-// type ExtTable is a mapping of the name of file types to their common file
-// name extensions.
-type ExtTable map[string][]string
-
-// function kindOfFileExt() searches a given ExtTable for the provided extension
-// string, returning both the name of the encoding and a boolean flag indicating
-// whether or not it was found in the table.
-func kindOfFileExt(table *ExtTable, ext string) (string, bool) {
-	// iter: each entry in current media's file extension table
-	for n, l := range *table {
-		// iter: each file extension in current table entry
-		for _, e := range l {
-			// cond: wanted file extension matches current file extension
-			if e == ext {
-				// return: current media kind, file type of extension
-				return n, true
-			}
-		}
-	}
-	return "", false
 }
 
 // type MediaExt is a struct pairing MediaKind values to their corresponding
@@ -357,61 +233,6 @@ func mediaKindOfFileExt(ext string) (MediaKind, string) {
 	return mkUnknown, ""
 }
 
-// type SupportExt is a struct pairing SupportKind values to their corresponding
-// ExtTable map.
-type SupportExt struct {
-	kind  SupportKind
-	table *ExtTable
-}
-
-var (
-	subsExt = SupportExt{
-		kind: skSubtitles,
-		table: &ExtTable{
-			"AQTitle":                    []string{".aqt"},
-			"CVD":                        []string{".cvd"},
-			"DKS":                        []string{".dks"},
-			"Gloss Subtitle":             []string{".gsub"},
-			"JACOSub":                    []string{".jss"},
-			"MPL2":                       []string{".mpl"},
-			"Phoenix Subtitle":           []string{".pjs"},
-			"PowerDivX":                  []string{".psb"},
-			"RealText / SMIL":            []string{".rt"},
-			"SAMI":                       []string{".smi"},
-			"SubRip":                     []string{".srt"},
-			"SubStation Alpha":           []string{".ssa"},
-			"Advanced SubStation Alpha":  []string{".ass"},
-			"Structured Subtitle Format": []string{".ssf"},
-			"Spruce subtitle format":     []string{".stl"},
-			"MicroDVD":                   []string{".sub"},
-			"MPSub":                      []string{".sub"},
-			"SubViewer":                  []string{".sub"},
-			"VobSub":                     []string{".sub", ".idx"},
-			"SVCD":                       []string{".svcd"},
-			"MPEG-4 Timed Text":          []string{".ttxt"},
-			"Universal Subtitle Format":  []string{".usf"},
-		},
-	}
-)
-
-// function supportKindOfFileExt() searches all SupportExt mappings for a given
-// file name extension, returning both the SupportKind and the type/encoding
-// name associated with that file name extension.
-func supportKindOfFileExt(ext string) (SupportKind, string) {
-
-	// constant values in file extension tables are all lowercase. convert the
-	// search key to lowercase for case-insensitivity.
-	extLower := strings.ToLower(ext)
-
-	// iter: all supported kinds of media
-	for _, m := range []SupportExt{subsExt} {
-		if n, ok := kindOfFileExt(m.table, extLower); ok {
-			return m.kind, n
-		}
-	}
-	return skUnknown, ""
-}
-
 // function toRecord() creates a struct capable of being stored in the database.
 // defines type AudioMedia's implementation of the EntityRecord interface.
 func (m *AudioMedia) toRecord() (*EntityRecord, *ReturnCode) {
@@ -497,51 +318,6 @@ func (m *VideoMedia) fromRecord(data []byte) *ReturnCode {
 	if err := json.Unmarshal(data, m); nil != err {
 		return rcInvalidJSONData.specf(
 			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into VideoMedia struct: %s", string(data), err)
-	}
-
-	return nil
-}
-
-// function toRecord() creates a struct capable of being stored in the database.
-// defines type Subtitles's implementation of the EntityRecord interface.
-func (m *Subtitles) toRecord() (*EntityRecord, *ReturnCode) {
-
-	var (
-		record *EntityRecord = &EntityRecord{}
-		data   []byte
-		err    error
-	)
-
-	if data, err = json.Marshal(m); nil != err {
-		return nil, rcInvalidJSONData.specf(
-			"toRecord(): json.Marshal(%s): cannot marshal Subtitles struct into JSON object: %s", m, err)
-	}
-
-	if err = json.Unmarshal(data, record); nil != err {
-		return nil, rcInvalidJSONData.specf(
-			"toRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into EntityRecord struct: %s", string(data), err)
-	}
-
-	return record, nil
-}
-
-// function fromRecord() creates a struct using the record stored in the
-// database. defines type Subtitles's implementation of the EntityRecord
-// interface.
-func (m *Subtitles) fromRecord(data []byte) *ReturnCode {
-
-	// Subtitles has an embedded Support struct -pointer- (not struct). so if we
-	// create a zeroized Subtitles, the embedded Support will be a null pointer.
-	// we can protect this method from that null pointer by creating a zeroized
-	// Support and updating Subtitles's embedded pointer to reference it.
-	if nil == m.Support {
-		m.Support = &Support{}
-	}
-
-	// unmarshal our media object directly into the target
-	if err := json.Unmarshal(data, m); nil != err {
-		return rcInvalidJSONData.specf(
-			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into Subtitles struct: %s", string(data), err)
 	}
 
 	return nil

@@ -147,23 +147,6 @@ func (c *JSONDataConfig) equals(jdc *JSONDataConfig) (bool, []string) {
 	return 0 == len(uneq), uneq
 }
 
-// variable mediaColName maps the MediaKind enum values to the string name of their
-// corresponding collection in the database.
-var (
-	mediaColName = [mkCOUNT]string{
-		"Audio", // 0 = mkAudio
-		"Video", // 1 = mkVideo
-	}
-)
-
-// variable supportColName maps the SupportKind enum values to the string name of their
-// corresponding collection in the database.
-var (
-	supportColName = [skCOUNT]string{
-		"Subtitles", // 0 = skSubtitles
-	}
-)
-
 // type Database represents an abstraction from the internal persistant storage
 // mechanism used for maintaining an index of all known libraries and their
 // respective media content.
@@ -173,20 +156,22 @@ type Database struct {
 	name    string // libPath checksum (name of database directory)
 	dataDir string // directory containing all known library databases
 
-	store           *db.DB           // interactive database object
-	mediaCol        [mkCOUNT]*db.Col // db collections referenced by MediaKind
-	mediaNumRecords [mkCOUNT]uint    // number of records in each media collection
-	supportCol      [skCOUNT]*db.Col // db collections referenced by SupportKind
-	timeCreated     time.Time        // only set if the db was newly created, else IsZero() will return true
+	store          *db.DB                  // interactive database object
+	col            [ecCOUNT][]*db.Col      // db collections referenced by MediaKind
+	colName        [ecCOUNT][]string       // name of each collection
+	index          [ecCOUNT][]*EntityIndex // indices on each collection
+	numRecordsLoad [ecCOUNT][]uint         // number of records in each media collection discovered by load()
+	numRecordsScan [ecCOUNT][]uint         // number of records in each media collection discovered by scan()
+	timeCreated    time.Time               // only set if the db was newly created, else IsZero() will return true
 }
 
 // function newDatabase() creates a new high-level database object through
 // which all of the persistent storage operations should be performed.
 func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) {
 
-	// zeroized Time object is January 1, year 1, 00:00:00.000000000 UTC calling
-	// time.IsZero() will return true, alternatively calling
-	// (*Database).isFirstAppearance() on this object will return true.
+	// zeroized Time object is January 1, year 1, 00:00:00.000000000 UTC
+	// calling time.IsZero() with this value will return true, alternatively,
+	// calling our (*Database).isFirstAppearance() will also return true.
 	timeCreated := time.Time{}
 
 	// compute an identifying checksum from the absolute path to the library,
@@ -320,15 +305,17 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 
 	// initialize the new struct object.
 	base := &Database{
-		absPath:         path,
-		libPath:         abs,
-		name:            sum,
-		dataDir:         dat,
-		store:           store,
-		mediaCol:        [mkCOUNT]*db.Col{},
-		mediaNumRecords: [mkCOUNT]uint{},
-		supportCol:      [skCOUNT]*db.Col{},
-		timeCreated:     timeCreated,
+		absPath:        path,
+		libPath:        abs,
+		name:           sum,
+		dataDir:        dat,
+		store:          store,
+		col:            [ecCOUNT][]*db.Col{},
+		colName:        [ecCOUNT][]string{},
+		index:          [ecCOUNT][]*EntityIndex{},
+		numRecordsLoad: [ecCOUNT][]uint{},
+		numRecordsScan: [ecCOUNT][]uint{},
+		timeCreated:    timeCreated,
 	}
 
 	// initialize the backing data store by creating the required collections;
@@ -346,6 +333,54 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 // logs.
 func (d *Database) String() string {
 	return fmt.Sprintf("{%q,%s}", d.dataDir, d.name)
+}
+
+func (d *Database) totalRecordsString(load bool) string {
+	var numRecords *[ecCOUNT][]uint
+	if load {
+		numRecords = &d.numRecordsLoad
+	} else {
+		numRecords = &d.numRecordsScan
+	}
+
+	desc := ""
+	for class, count := range *numRecords {
+		for kind, name := range d.colName[class] {
+			if len(desc) > 0 {
+				desc = fmt.Sprintf("%s, ", desc)
+			}
+			desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
+		}
+	}
+	return desc
+}
+
+func (d *Database) totalRecordsLoadString() string {
+	// desc := ""
+	// for class, count := range d.numRecordsLoad {
+	// 	for kind, name := range d.colName[class] {
+	// 		if len(desc) > 0 {
+	// 			desc = fmt.Sprintf("%s, ", desc)
+	// 		}
+	// 		desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
+	// 	}
+	// }
+	// return desc
+	return d.totalRecordsString(true)
+}
+
+func (d *Database) totalRecordsScanString() string {
+	// desc := ""
+	// for class, count := range d.numRecordsLoad {
+	// 	for kind, name := range d.colName[class] {
+	// 		if len(desc) > 0 {
+	// 			desc = fmt.Sprintf("%s, ", desc)
+	// 		}
+	// 		desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
+	// 	}
+	// }
+	// return desc
+	return d.totalRecordsString(false)
 }
 
 // function close() closes the backing data store. returns true on success, and
@@ -368,41 +403,44 @@ func (d *Database) isFirstAppearance() bool {
 // ReturnCode on failure.
 func (d *Database) initialize() (bool, *ReturnCode) {
 
-	if _, err := d.initCollection(mediaColName[:], d.mediaCol[:], mediaIndex[:]); nil != err {
-		return false, err
-	}
+	for class := EntityClass(0); class < ecCOUNT; class++ {
 
-	if _, err := d.initCollection(supportColName[:], d.supportCol[:], supportIndex[:]); nil != err {
-		return false, err
-	}
+		// create each of the collection slices, copying items as needed.
+		numCol := len(entityColName[class])
+		d.col[class] = make([]*db.Col, numCol)
+		d.colName[class] = make([]string, numCol)
+		d.numRecordsLoad[class] = make([]uint, numCol)
+		d.numRecordsScan[class] = make([]uint, numCol)
+		copy(d.colName[class], entityColName[class])
 
-	return true, nil
+		// create each of the index slices, copying items as needed.
+		numIndex := len(entityIndex[class])
+		d.index[class] = make([]*EntityIndex, numIndex)
+		copy(d.index[class], entityIndex[class])
 
-}
-
-func (d *Database) initCollection(colName []string, col []*db.Col, index []EntityIndex) (bool, *ReturnCode) {
-
-	// iterate over all required collection names
-	for kind, name := range colName {
-		// verify it is available
-		existed := d.store.ColExists(name)
-		if !existed {
-			// otherwise, collection doesn't exist -- create it
-			if err := d.store.Create(name); nil != err {
-				return false, rcDatabaseError.specf(
-					"initialize(): %s: Create(%q): %s", d, name, err)
-			}
-			infoLog.tracef("created database collection: %q (%s)", name, d.name)
-		}
-
-		// keep a reference to the collection handler
-		col[kind] = d.store.Use(name)
-
-		if !existed {
-			for _, idx := range index {
-				if err := col[kind].Index(idx); nil != err {
+		// iterate over all required collection names
+		for kind, name := range d.colName[class] {
+			// verify it is available
+			existed := d.store.ColExists(name)
+			if !existed {
+				// otherwise, collection doesn't exist -- create it
+				if err := d.store.Create(name); nil != err {
 					return false, rcDatabaseError.specf(
-						"initialize(): %s: Index(%q): %s", d, name, err)
+						"initialize(): %s: Create(%q): %s", d, name, err)
+				}
+				infoLog.tracef("created database collection: %q (%s)", name, d.name)
+			}
+
+			// keep a reference to the collection handler
+			d.col[class][kind] = d.store.Use(name)
+
+			// install all class indices if this is a newly created collection.
+			if !existed {
+				for _, idx := range d.index[class] {
+					if err := d.col[class][kind].Index(*idx); nil != err {
+						return false, rcDatabaseError.specf(
+							"initialize(): %s: Index(%q): %s", d, name, err)
+					}
 				}
 			}
 		}
@@ -413,12 +451,16 @@ func (d *Database) initCollection(colName []string, col []*db.Col, index []Entit
 // function scrub() fixes corrupt records and defragments disk space used by the
 // database -- performed on all collections in the database.
 func (d *Database) scrub() {
-	for kind, name := range mediaColName {
-		if d.store.ColExists(name) {
-			d.store.Scrub(name)
+
+	for class, col := range d.col {
+		for kind, name := range d.colName[class] {
+			if d.store.ColExists(name) {
+				d.store.Scrub(name)
+			}
+			// after Scrub(), tiedot has potentially reallocated space elsewhere and
+			// the reference is probably no longer valid.
+			col[kind] = d.store.Use(name)
 		}
-		// after Scrub(), tiedot has potentially reallocated space elsewhere and
-		// the reference is probably no longer valid.
-		d.mediaCol[kind] = d.store.Use(name)
 	}
+
 }

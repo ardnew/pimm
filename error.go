@@ -21,7 +21,6 @@ import (
 // type ReturnCodeKind identifies the different kinds of return codes.
 type ReturnCodeKind int
 
-// unexported constant values of the ReturnCodeKind enum type.
 const (
 	rkInfo ReturnCodeKind = iota
 	rkWarn
