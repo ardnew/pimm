@@ -421,9 +421,17 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 		infoLog.verbosef("scanning: %q", l.name)
 		err = l.scanDive(l.absPath, 1, handler)
 		l.scanElapsed = time.Since(<-l.scanStart)
-		infoLog.verbosef(
-			"finished scanning: %q (%s new files found in %s)",
-			l.name, l.db.totalRecordsScanString(), l.scanElapsed.Round(time.Millisecond))
+
+		total, summary := l.db.totalRecordsScanString()
+		if total > 0 {
+			infoLog.verbosef(
+				"finished scanning: %q (%s found in %s) [NEW MEDIA]",
+				l.name, summary, l.scanElapsed.Round(time.Millisecond))
+		} else {
+			infoLog.verbosef(
+				"finished scanning: %q (no media found in %s)",
+				l.name, l.scanElapsed.Round(time.Millisecond))
+		}
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
@@ -508,9 +516,16 @@ func (l *Library) load() *ReturnCode {
 		}
 		l.loadElapsed = time.Since(<-l.loadStart)
 
-		infoLog.verbosef(
-			"finished loading: %q (%s files loaded in %s)",
-			l.name, l.db.totalRecordsLoadString(), l.loadElapsed.Round(time.Millisecond))
+		total, summary := l.db.totalRecordsLoadString()
+		if total > 0 {
+			infoLog.verbosef(
+				"finished loading: %q (%s loaded in %s)",
+				l.name, summary, l.loadElapsed.Round(time.Millisecond))
+		} else {
+			infoLog.verbosef(
+				"finished loading: %q (no media loaded in %s)",
+				l.name, l.loadElapsed.Round(time.Millisecond))
+		}
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,

@@ -335,7 +335,9 @@ func (d *Database) String() string {
 	return fmt.Sprintf("{%q,%s}", d.dataDir, d.name)
 }
 
-func (d *Database) totalRecordsString(load bool) string {
+func (d *Database) totalRecordsLoadString() (uint, string) { return d.totalRecordsString(true) }
+func (d *Database) totalRecordsScanString() (uint, string) { return d.totalRecordsString(false) }
+func (d *Database) totalRecordsString(load bool) (uint, string) {
 	var numRecords *[ecCOUNT][]uint
 	if load {
 		numRecords = &d.numRecordsLoad
@@ -343,44 +345,18 @@ func (d *Database) totalRecordsString(load bool) string {
 		numRecords = &d.numRecordsScan
 	}
 
+	total := uint(0)
 	desc := ""
 	for class, count := range *numRecords {
 		for kind, name := range d.colName[class] {
 			if len(desc) > 0 {
 				desc = fmt.Sprintf("%s, ", desc)
 			}
+			total += count[kind]
 			desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
 		}
 	}
-	return desc
-}
-
-func (d *Database) totalRecordsLoadString() string {
-	// desc := ""
-	// for class, count := range d.numRecordsLoad {
-	// 	for kind, name := range d.colName[class] {
-	// 		if len(desc) > 0 {
-	// 			desc = fmt.Sprintf("%s, ", desc)
-	// 		}
-	// 		desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
-	// 	}
-	// }
-	// return desc
-	return d.totalRecordsString(true)
-}
-
-func (d *Database) totalRecordsScanString() string {
-	// desc := ""
-	// for class, count := range d.numRecordsLoad {
-	// 	for kind, name := range d.colName[class] {
-	// 		if len(desc) > 0 {
-	// 			desc = fmt.Sprintf("%s, ", desc)
-	// 		}
-	// 		desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
-	// 	}
-	// }
-	// return desc
-	return d.totalRecordsString(false)
+	return total, desc
 }
 
 // function close() closes the backing data store. returns true on success, and
