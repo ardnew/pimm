@@ -14,6 +14,7 @@
 package main
 
 import (
+	"github.com/HouzuoGuo/tiedot/db"
 	//"github.com/davecgh/go-spew/spew"
 
 	"encoding/json"
@@ -78,12 +79,18 @@ type MediaIndexID int
 
 const (
 	mxPath MediaIndexID = iota
+	mxDir
+	mxName
+	mxBase
 	mxCOUNT
 )
 
 var (
 	mediaIndex = [mxCOUNT]*EntityIndex{
 		&EntityIndex{"AbsPath"}, // = mxPath (0)
+		&EntityIndex{"AbsDir"},  // = mxDir  (1)
+		&EntityIndex{"AbsName"}, // = mxName (2)
+		&EntityIndex{"AbsBase"}, // = mxBase (3)
 	}
 )
 
@@ -127,6 +134,58 @@ func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 		KnownSubtitles: []Subtitles{}, // absolute path to all associated subtitles
 		Subtitles:      Subtitles{},   // absolute path to selected subtitles
 	}
+}
+
+// function addSubtitles() adds the given subtitles to this VideoMedia object
+// if and only if the subs do not already exist in the object's list of known
+// subtitles. additionally, the subs are optionally set as the preferred subs to
+// be used during playback; the database record of this video is also optionally
+// updated to include the subs in the list of known subtitles.
+func (m *VideoMedia) addSubtitles(vidCol, subCol *db.Col, vidID, subID int, update, preferred bool, subs *Subtitles) (bool, *ReturnCode) {
+
+	var (
+		rec     *EntityRecord
+		recErr  *ReturnCode
+		subSeen bool
+	)
+
+	// walk the current list of known subtitles, setting a flag if we have
+	// already seen this one before.
+	for _, s := range m.KnownSubtitles {
+		if s.AbsPath == subs.AbsPath {
+			subSeen = true
+			break
+		}
+	}
+	// append it to the list if we haven't seen it before.
+	if !subSeen {
+		m.KnownSubtitles = append(m.KnownSubtitles, *subs)
+	}
+	// and update the actively selected subtitles if desired.
+	if preferred {
+		m.Subtitles = *subs
+	}
+
+	// update the database record of this VideoMedia to include the new
+	// subtitles association. any subsequent queries should thus include it.
+	if rec, recErr = m.toRecord(); nil != recErr {
+		return false, recErr
+	}
+	if update {
+		if err := vidCol.Update(vidID, *rec); nil != err {
+			return false, rcDatabaseError.specf(
+				"addSubtitles(%s, %d, %s): failed to update record: %s", vidCol, vidID, *subs, err)
+		}
+	}
+
+	if ok, err := subs.addVideoMedia(subCol, subID, update, m); !ok {
+		return false, err
+	}
+
+	// return true if and only if we added this subtitles reference to the list.
+	// return(ed) false if we've either seen it before or if there was an error
+	// somewhere (e.g. updating the database).
+	return !subSeen, nil
 }
 
 // type MediaExt is a struct pairing MediaKind values to their corresponding
@@ -234,7 +293,7 @@ func mediaKindOfFileExt(ext string) (MediaKind, string) {
 }
 
 // function toRecord() creates a struct capable of being stored in the database.
-// defines type AudioMedia's implementation of the EntityRecord interface.
+// defines type AudioMedia's implementation of the StorableEntity interface.
 func (m *AudioMedia) toRecord() (*EntityRecord, *ReturnCode) {
 
 	var (
@@ -257,7 +316,7 @@ func (m *AudioMedia) toRecord() (*EntityRecord, *ReturnCode) {
 }
 
 // function fromRecord() creates a struct using the record stored in the
-// database. defines type AudioMedia's implementation of the EntityRecord
+// database. defines type AudioMedia's implementation of the StorableEntity
 // interface.
 func (m *AudioMedia) fromRecord(data []byte) *ReturnCode {
 
@@ -278,8 +337,34 @@ func (m *AudioMedia) fromRecord(data []byte) *ReturnCode {
 	return nil
 }
 
+func (m *AudioMedia) fromID(col *db.Col, id int) *ReturnCode {
+
+	read, readErr := col.Read(id)
+	if nil != readErr {
+		return rcDatabaseError.specf(
+			"fromID(%s): db.Read(%d): cannot read record from database: %s",
+			col, id, readErr)
+	}
+
+	data, marshalErr := json.Marshal(read)
+	if nil != marshalErr {
+		return rcInvalidJSONData.specf(
+			"fromID(%s): json.Marshal(%s): cannot marshal query result into JSON object: %s",
+			col, read, marshalErr)
+	}
+
+	unmarshalErr := json.Unmarshal(data, m)
+	if nil != unmarshalErr {
+		return rcInvalidJSONData.specf(
+			"fromID(%s): json.Unmarshal(%s): cannot unmarshal JSON object into AudioMedia struct: %s",
+			col, data, unmarshalErr)
+	}
+
+	return nil
+}
+
 // function toRecord() creates a struct capable of being stored in the database.
-// defines type VideoMedia's implementation of the EntityRecord interface.
+// defines type VideoMedia's implementation of the StorableEntity interface.
 func (m *VideoMedia) toRecord() (*EntityRecord, *ReturnCode) {
 
 	var (
@@ -302,7 +387,7 @@ func (m *VideoMedia) toRecord() (*EntityRecord, *ReturnCode) {
 }
 
 // function fromRecord() creates a struct using the record stored in the
-// database. defines type VideoMedia's implementation of the EntityRecord
+// database. defines type VideoMedia's implementation of the StorableEntity
 // interface.
 func (m *VideoMedia) fromRecord(data []byte) *ReturnCode {
 
@@ -318,6 +403,32 @@ func (m *VideoMedia) fromRecord(data []byte) *ReturnCode {
 	if err := json.Unmarshal(data, m); nil != err {
 		return rcInvalidJSONData.specf(
 			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into VideoMedia struct: %s", string(data), err)
+	}
+
+	return nil
+}
+
+func (m *VideoMedia) fromID(col *db.Col, id int) *ReturnCode {
+
+	read, readErr := col.Read(id)
+	if nil != readErr {
+		return rcDatabaseError.specf(
+			"fromID(%s): db.Read(%d): cannot read record from database: %s",
+			col, id, readErr)
+	}
+
+	data, marshalErr := json.Marshal(read)
+	if nil != marshalErr {
+		return rcInvalidJSONData.specf(
+			"fromID(%s): json.Marshal(%s): cannot marshal query result into JSON object: %s",
+			col, read, marshalErr)
+	}
+
+	unmarshalErr := json.Unmarshal(data, m)
+	if nil != unmarshalErr {
+		return rcInvalidJSONData.specf(
+			"fromID(%s): json.Unmarshal(%s): cannot unmarshal JSON object into VideoMedia struct: %s",
+			col, data, unmarshalErr)
 	}
 
 	return nil

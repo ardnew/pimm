@@ -61,6 +61,7 @@ var (
 	rcDatabaseError    = newReturnCode(rkWarn, errorOffset+10, "database operation failed", "")  // failed to perform an operation on the database
 	rcDuplicateLibrary = newReturnCode(rkWarn, errorOffset+11, "duplicate library", "")          // duplicate; library path already being handled
 	rcInvalidJSONData  = newReturnCode(rkWarn, errorOffset+12, "invalid JSON data", "")          // cannot handle some JSON-related data object
+	rcQueryError       = newReturnCode(rkWarn, errorOffset+13, "failed to query database", "")   // couldn't perform query on database collection
 	rcUnknown          = newReturnCode(rkError, maxReturnCode, "unknown error", "")              // unanticipated error encountered
 )
 

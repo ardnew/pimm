@@ -15,6 +15,7 @@ package main
 
 import (
 	"github.com/HouzuoGuo/tiedot/db"
+	//"github.com/davecgh/go-spew/spew"
 
 	"fmt"
 	"os"
@@ -37,23 +38,26 @@ type Library struct {
 
 	newMedia     chan *Discovery // media discovery
 	newDirectory chan *Discovery // subdirectory discovery
-	newAuxiliary chan *Discovery // support file discovery
-
-	scanComplete chan bool      // synchronization lock
-	scanStart    chan time.Time // counting semaphore to limit number of concurrent scanners
-	scanElapsed  time.Duration  // measures time elapsed for scan to complete (use internally, not thread-safe!)
+	newSupport   chan *Discovery // support file discovery
 
 	loadComplete chan bool      // synchronization lock
 	loadStart    chan time.Time // counting semaphore to limit number of concurrent loaders
 	loadElapsed  time.Duration  // measures time elapsed for load to complete (use internally, not thread-safe!)
+
+	scanComplete chan bool      // synchronization lock
+	scanStart    chan time.Time // counting semaphore to limit number of concurrent scanners
+	scanElapsed  time.Duration  // measures time elapsed for scan to complete (use internally, not thread-safe!)
 }
 
 // type PathHandler represents a function that accepts a *Library, file path,
 // and variable number of additional arguments. this is intended for use by the
-// function scanDive() when it encounters files and directories.
+// function scanDive()/loadDive() when they encounter files and directories.
 type PathHandler func(*Library, string, ...interface{})
 type ScanHandler struct {
-	handleEnter, handleExit, handleMedia, handleAux, handleOther PathHandler
+	handleEnter, handleExit, handleMedia, handleSupport, handleOther PathHandler
+}
+type LoadHandler struct {
+	handleMedia, handleSupport, handleOther PathHandler
 }
 
 // type ExtTable is a mapping of the name of file types to their common file
@@ -77,6 +81,16 @@ func kindOfFileExt(table *ExtTable, ext string) (string, bool) {
 	}
 	return "", false
 }
+
+// type DiscoveryMethod represents the method by which media is located.
+type DiscoverMethod int
+
+const (
+	dmUnknown DiscoverMethod = iota - 1 // = -1
+	dmLoad                              // = 0 loaded from database
+	dmScan                              // = 1 found by file system traversal
+	dmCOUNT                             // = 2
+)
 
 // type Discovery represents any sort of file entity discovered during a file
 // system traversal of the library; we can capture here any other useful info
@@ -167,15 +181,15 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		// channels for communicating scanner data to the main thread.
 		newMedia:     make(chan *Discovery),
 		newDirectory: make(chan *Discovery),
-		newAuxiliary: make(chan *Discovery),
-
-		scanComplete: make(chan bool),
-		scanStart:    make(chan time.Time, maxLibraryScanners),
-		scanElapsed:  0,
+		newSupport:   make(chan *Discovery),
 
 		loadComplete: make(chan bool),
 		loadStart:    make(chan time.Time, maxLibraryScanners),
 		loadElapsed:  0,
+
+		scanComplete: make(chan bool),
+		scanStart:    make(chan time.Time, maxLibraryScanners),
+		scanElapsed:  0,
 	}, nil
 }
 
@@ -185,10 +199,149 @@ func (l *Library) String() string {
 	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.db)
 }
 
+type docData struct {
+	id   int
+	data []byte
+}
+
+func (l *Library) recandidateSubtitles(force bool) *ReturnCode {
+
+	orphan := []*docData{}
+
+	l.db.col[ecSupport][skSubtitles].ForEachDoc(
+		func(id int, data []byte) (willMoveOn bool) {
+			orphan = append(orphan, &docData{id: id, data: data})
+			return true // move on to next record
+		})
+
+	for _, doc := range orphan {
+		subs := &Subtitles{}
+		subs.fromRecord(doc.data)
+		if force || 0 >= len(subs.KnownVideoMedia) {
+			infoLog.tracef("scanning media for subtitles: %s", subs)
+			if _, err := subs.findCandidates(l, doc.id, true); nil != err {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (l *Library) loadDive(lh *LoadHandler, class EntityClass, kind int) (uint, *ReturnCode) {
+
+	var count uint = 0
+	var ret *ReturnCode = nil
+
+	l.db.col[class][kind].ForEachDoc(
+		func(id int, data []byte) (willMoveOn bool) {
+			switch class {
+			case ecMedia:
+				switch MediaKind(kind) {
+				case mkAudio:
+					audio := &AudioMedia{}
+					audio.fromRecord(data)
+					infoLog.tracef("loaded audio (ID:%d): %s", id, audio)
+					if nil != lh && nil != lh.handleMedia {
+						lh.handleMedia(l, audio.AbsPath, audio, id)
+					}
+				case mkVideo:
+					video := &VideoMedia{}
+					video.fromRecord(data)
+					infoLog.tracef("loaded video (ID:%d): %s", id, video)
+					if nil != lh && nil != lh.handleMedia {
+						lh.handleMedia(l, video.AbsPath, video, id)
+					}
+				default:
+				}
+			case ecSupport:
+				switch SupportKind(kind) {
+				case skSubtitles:
+					subs := &Subtitles{}
+					subs.fromRecord(data)
+					infoLog.tracef("loaded subtitles (ID:%d): %s", id, subs)
+					if nil != lh && nil != lh.handleSupport {
+						lh.handleSupport(l, subs.AbsPath, skSubtitles, subs, id)
+					}
+				default:
+				}
+			default:
+			}
+			count++
+			return true // move on to next record
+
+		})
+	return count, ret
+}
+
+// function load() is the entry point for initiating a load on the library's
+// backing data store. currently, the load is dispatched and cannot be safely
+// interruped. you must wait for the load to finish before restarting.
+func (l *Library) load(handler *LoadHandler) (uint, *ReturnCode) {
+
+	var (
+		numLoad uint = 0 // number of known files loaded from database
+		err     *ReturnCode
+	)
+
+	//
+	// the loadStart channel is buffered so that we can limit the number of
+	// goroutines concurrently reading this library's database:
+	//
+	//     writes to the channel will fail and fallback on the default select
+	//     case if the max number of loaders is reached -- which sets an error
+	//     code that is returned to the caller -- so be sure to check
+	//     the return value when calling function load()!
+	//
+
+	// try writing to the buffered channel. this will succeed if and only if it
+	// isn't already filled to capacity.
+	select {
+	case l.loadStart <- time.Now():
+		// the write succeeded, so we can initiate loading. keep track of the
+		// time at which we began so that the time elapsed can be calculated and
+		// notified to the user.
+		infoLog.verbosef("loading: %q", l.name)
+		// multi-dimensional numRecordsLoad contains fixed outer-array dimension
+		// equal to number of collections (i.e. classes) equal to ecCOUNT
+		for classID, count := range l.db.numRecordsLoad {
+			class := EntityClass(classID)
+			for kind := range count {
+				if count[kind], err = l.loadDive(handler, class, kind); nil != err {
+					return numLoad, err
+				}
+			}
+		}
+		l.loadElapsed = time.Since(<-l.loadStart)
+
+		total, summary := l.db.totalMediaRecordsLoadString()
+		if total > 0 {
+			infoLog.verbosef(
+				"finished loading: %q (%s loaded in %s)",
+				l.name, summary, l.loadElapsed.Round(time.Millisecond))
+		} else {
+			infoLog.verbosef(
+				"finished loading: %q (no media loaded in %s)",
+				l.name, l.loadElapsed.Round(time.Millisecond))
+		}
+		numLoad = total
+
+	default:
+		// if the write failed, we fall back to this default case. the only
+		// reason it should fail is if the buffer is already filled to capacity,
+		// meaning we already have the max allowed number of goroutines loading
+		// this library's database.
+		err = rcLibraryBusy.specf(
+			"load(): max number of loaders reached: %q (max = %d)",
+			l.absPath, maxLibraryScanners)
+	}
+	return numLoad, err
+}
+
 // function scanDive() is the recursive step for the file system traversal,
 // invoked initially by function scan(). error codes generated in this routine
 // will be returned to the caller of scanDive() -and- the caller of scan().
-func (l *Library) scanDive(absPath string, depth uint, sh *ScanHandler) *ReturnCode {
+func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnCode {
 
 	// get a path to the file relative to the library root dir (useful for
 	// displaying diagnostic info to the user).
@@ -241,7 +394,7 @@ func (l *Library) scanDive(absPath string, depth uint, sh *ScanHandler) *ReturnC
 		// recursively scan all of this subdirectory's contents.
 		var scanErr *ReturnCode
 		for _, name := range dirName {
-			scanErr = l.scanDive(path.Join(absPath, name), depth+1, sh)
+			scanErr = l.scanDive(sh, path.Join(absPath, name), depth+1)
 			if nil != scanErr {
 				// a file/subdir of the current directory threw an error.
 				warnLog.verbose(scanErr)
@@ -264,7 +417,6 @@ func (l *Library) scanDive(absPath string, depth uint, sh *ScanHandler) *ReturnC
 			"scanDive(%q, %d): not a regular file (skipping)", dispPath, depth)
 
 	default:
-
 		// function seenFile() checks if the file specified by path and kind of
 		// media exists in the associated collection of this library's database.
 		seenFile := func(lib *Library, class EntityClass, kind int, path string) (bool, error) {
@@ -348,6 +500,7 @@ func (l *Library) scanDive(absPath string, depth uint, sh *ScanHandler) *ReturnC
 			}
 
 		default:
+
 			// doesn't have an extension typically associated with media files.
 			// check if it is a media-supporting file.
 			switch kind, extName := supportKindOfFileExt(ext); kind {
@@ -364,8 +517,8 @@ func (l *Library) scanDive(absPath string, depth uint, sh *ScanHandler) *ReturnC
 						if id, insErr := sc.Insert(*rec); nil == insErr {
 							l.db.numRecordsScan[ecSupport][kind]++
 							infoLog.tracef("discovered subtitles: %s", subs)
-							if nil != sh && nil != sh.handleAux {
-								sh.handleAux(l, absPath, skSubtitles, subs, id)
+							if nil != sh && nil != sh.handleSupport {
+								sh.handleSupport(l, absPath, skSubtitles, subs, id)
 							}
 						} else {
 							return rcDatabaseError.specf(
@@ -386,19 +539,16 @@ func (l *Library) scanDive(absPath string, depth uint, sh *ScanHandler) *ReturnC
 		}
 		return nil
 	}
-
-	// we should never reach here
-	return nil
 }
 
 // function scan() is the entry point for initiating a scan on the library's
 // root file system. currently, the scan is dispatched and cannot be safely
 // interruped. you must wait for the scan to finish before restarting.
-func (l *Library) scan(handler *ScanHandler) *ReturnCode {
+func (l *Library) scan(handler *ScanHandler) (uint, *ReturnCode) {
 
 	var (
-		//count uint = 0 // number of -new- files discovered on file system
-		err *ReturnCode
+		numScan uint = 0 // number of -new- files discovered on file system
+		err     *ReturnCode
 	)
 
 	//
@@ -419,19 +569,24 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
 		infoLog.verbosef("scanning: %q", l.name)
-		err = l.scanDive(l.absPath, 1, handler)
+		err = l.scanDive(handler, l.absPath, 1)
+		if nil == err {
+			l.recandidateSubtitles(false)
+		}
 		l.scanElapsed = time.Since(<-l.scanStart)
 
-		total, summary := l.db.totalRecordsScanString()
+		total, summary := l.db.totalMediaRecordsScanString()
 		if total > 0 {
 			infoLog.verbosef(
-				"finished scanning: %q (%s found in %s) [NEW MEDIA]",
+				"finished scanning: %q (%s found in %s)",
 				l.name, summary, l.scanElapsed.Round(time.Millisecond))
 		} else {
 			infoLog.verbosef(
-				"finished scanning: %q (no media found in %s)",
+				"finished scanning: %q (no new media found in %s)",
 				l.name, l.scanElapsed.Round(time.Millisecond))
 		}
+		numScan = total
+
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
@@ -441,99 +596,5 @@ func (l *Library) scan(handler *ScanHandler) *ReturnCode {
 			"scan(): max number of scanners reached: %q (max = %d)",
 			l.absPath, maxLibraryScanners)
 	}
-	return err
-}
-
-func (l *Library) loadDive(class EntityClass, kind int) (uint, *ReturnCode) {
-
-	var count uint = 0
-
-	l.db.col[class][kind].ForEachDoc(
-		func(id int, data []byte) (willMoveOn bool) {
-			switch class {
-			case ecMedia:
-				switch MediaKind(kind) {
-				case mkAudio:
-					audio := &AudioMedia{}
-					audio.fromRecord(data)
-					infoLog.tracef("loaded audio (ID = %d): %s", id, audio)
-				case mkVideo:
-					video := &VideoMedia{}
-					video.fromRecord(data)
-					infoLog.tracef("loaded video (ID = %d): %s", id, video)
-				default:
-				}
-			case ecSupport:
-				switch SupportKind(kind) {
-				case skSubtitles:
-					subs := &Subtitles{}
-					subs.fromRecord(data)
-					infoLog.tracef("loaded subtitles (ID = %d): %s", id, subs)
-				default:
-				}
-			default:
-			}
-			count++
-			return true // move on to the next document OR
-
-		})
-	return count, nil
-}
-
-// function load() is the entry point for initiating a load on the library's
-// backing data store. currently, the load is dispatched and cannot be safely
-// interruped. you must wait for the load to finish before restarting.
-func (l *Library) load() *ReturnCode {
-
-	var total [ecCOUNT]uint
-	var err *ReturnCode
-
-	//
-	// the loadStart channel is buffered so that we can limit the number of
-	// goroutines concurrently reading this library's database:
-	//
-	//     writes to the channel will fail and fallback on the default select
-	//     case if the max number of loaders is reached -- which sets an error
-	//     code that is returned to the caller -- so be sure to check
-	//     the return value when calling function load()!
-	//
-
-	// try writing to the buffered channel. this will succeed if and only if it
-	// isn't already filled to capacity.
-	select {
-	case l.loadStart <- time.Now():
-		// the write succeeded, so we can initiate loading. keep track of the
-		// time at which we began so that the time elapsed can be calculated and
-		// notified to the user.
-		infoLog.verbosef("loading: %q", l.name)
-		for class, count := range l.db.numRecordsLoad {
-			for kind := range count {
-				if count[kind], err = l.loadDive(EntityClass(class), kind); nil != err {
-					return err
-				}
-				total[class] += count[kind]
-			}
-		}
-		l.loadElapsed = time.Since(<-l.loadStart)
-
-		total, summary := l.db.totalRecordsLoadString()
-		if total > 0 {
-			infoLog.verbosef(
-				"finished loading: %q (%s loaded in %s)",
-				l.name, summary, l.loadElapsed.Round(time.Millisecond))
-		} else {
-			infoLog.verbosef(
-				"finished loading: %q (no media loaded in %s)",
-				l.name, l.loadElapsed.Round(time.Millisecond))
-		}
-	default:
-		// if the write failed, we fall back to this default case. the only
-		// reason it should fail is if the buffer is already filled to capacity,
-		// meaning we already have the max allowed number of goroutines loading
-		// this library's database.
-		err = rcLibraryBusy.specf(
-			"load(): max number of loaders reached: %q (max = %d)",
-			l.absPath, maxLibraryScanners)
-	}
-	return err
+	return numScan, err
 }

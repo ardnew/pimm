@@ -28,7 +28,6 @@ import (
 const (
 	defaultConfigPath  = "config"
 	defaultLibDataPath = "library.db"
-	defaultTimeLayout  = "2006-01-02T15:04:05.000Z"
 )
 
 // versioning information defined by compiler switches in Makefile.
@@ -202,6 +201,7 @@ func main() {
 	for _, l := range library {
 		<-l.scanComplete
 	}
+
 	scanElapsed := time.Since(scanStart)
 	infoLog.logf("initialization complete (%s)", scanElapsed.Round(time.Millisecond))
 
@@ -386,6 +386,8 @@ func initLibrary(options *Options) []*Library {
 // media discovered (see function watchLibrary() for handlers).
 func populateLibrary(options *Options, library []*Library) {
 
+	numMedia := map[*Library]uint{}
+
 	// for each library, dispatch a few (3) goroutines in the following order:
 	//   1. begin listening for content on the new-media and new-directory
 	//       discovery channels, and decide what to do with them;
@@ -405,10 +407,29 @@ func populateLibrary(options *Options, library []*Library) {
 		//  the local database, verify it still exists, then notify the channel.
 		go func(l *Library) {
 			if !l.db.isFirstAppearance() {
-				loadErr := l.load()
+				count, loadErr := l.load(
+					&LoadHandler{
+						// the loader identified some file in a subdirectory of
+						// the library's file system as a media file.
+						handleMedia: func(l *Library, p string, v ...interface{}) {
+							l.newMedia <- newDiscovery(v...)
+						},
+						// the loader identified some file in a subdirectory of
+						// the library's file system as a supporting auxiliary
+						// file to a known or as-of-yet unknown media file.
+						handleSupport: func(l *Library, p string, v ...interface{}) {
+							l.newSupport <- newDiscovery(v...)
+						},
+						// the loader identified some file in a subdirectory of
+						// the library's file system as an undesirable piece of
+						// trash.
+						handleOther: func(l *Library, p string, v ...interface{}) {
+						},
+					})
 				if nil != loadErr {
 					errLog.verbose(loadErr)
 				}
+				numMedia[l] = count
 			}
 			l.loadComplete <- true
 		}(lib)
@@ -417,7 +438,7 @@ func populateLibrary(options *Options, library []*Library) {
 		// signal channels whenever any sort of content is found.
 		go func(l *Library) {
 			<-l.loadComplete
-			scanErr := l.scan(
+			count, scanErr := l.scan(
 				&ScanHandler{
 					// the scanner entered a subdirectory of the library's file
 					// system.
@@ -436,8 +457,8 @@ func populateLibrary(options *Options, library []*Library) {
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as a supporting auxiliary file to a
 					// known or as-of-yet unknown media file.
-					handleAux: func(l *Library, p string, v ...interface{}) {
-						l.newAuxiliary <- newDiscovery(v...)
+					handleSupport: func(l *Library, p string, v ...interface{}) {
+						l.newSupport <- newDiscovery(v...)
 					},
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as an undesirable piece of trash.
@@ -447,7 +468,11 @@ func populateLibrary(options *Options, library []*Library) {
 			if nil != scanErr {
 				errLog.verbose(scanErr)
 			}
+			if numMedia[l] += count; 0 == numMedia[l] {
+				warnLog.logf("no media in %q: library is empty!", l.name)
+			}
 			l.scanComplete <- true
+
 		}(lib)
 	}
 
@@ -470,7 +495,7 @@ func watchLibrary(lib *Library) {
 		select {
 		case /* v := */ <-lib.newDirectory:
 		case /* v := */ <-lib.newMedia:
-		case /* v := */ <-lib.newAuxiliary:
+		case /* v := */ <-lib.newSupport:
 		default:
 		}
 	}

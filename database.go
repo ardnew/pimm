@@ -41,10 +41,10 @@ const (
 
 var (
 	// see type JSONDataConfig for a description of these items
-	defaultMaxRecordSize  = 1 * mebiBytes
+	defaultMaxRecordSize  = 64 * kibiBytes
 	defaultDiskBufferSize = 4 * defaultMaxRecordSize / runtime.NumCPU()
 	defaultHashBucketSize = 16
-	defaultHashBufferSize = defaultMaxRecordSize / 2 / runtime.NumCPU()
+	defaultHashBufferSize = defaultDiskBufferSize / 4
 	defaultHashedBitsSize = 13
 	defaultNumHashBuckets = 8192
 )
@@ -335,20 +335,34 @@ func (d *Database) String() string {
 	return fmt.Sprintf("{%q,%s}", d.dataDir, d.name)
 }
 
-func (d *Database) totalRecordsLoadString() (uint, string) { return d.totalRecordsString(true) }
-func (d *Database) totalRecordsScanString() (uint, string) { return d.totalRecordsString(false) }
-func (d *Database) totalRecordsString(load bool) (uint, string) {
+func (d *Database) totalMediaRecordsLoadString() (uint, string) {
+	return d.totalRecordsString(dmLoad, ecMedia, -1)
+}
+func (d *Database) totalMediaRecordsScanString() (uint, string) {
+	return d.totalRecordsString(dmScan, ecMedia, -1)
+}
+func (d *Database) totalRecordsString(m DiscoverMethod, c EntityClass, k int) (uint, string) {
+
 	var numRecords *[ecCOUNT][]uint
-	if load {
+	switch m {
+	case dmLoad:
 		numRecords = &d.numRecordsLoad
-	} else {
+	case dmScan:
 		numRecords = &d.numRecordsScan
+	default:
+		return 0, ""
 	}
 
 	total := uint(0)
 	desc := ""
 	for class, count := range *numRecords {
+		if !(int(c) == class || c < 0) {
+			continue
+		}
 		for kind, name := range d.colName[class] {
+			if !(int(k) == kind || k < 0) {
+				continue
+			}
 			if len(desc) > 0 {
 				desc = fmt.Sprintf("%s, ", desc)
 			}

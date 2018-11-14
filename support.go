@@ -14,10 +14,12 @@
 package main
 
 import (
+	"github.com/HouzuoGuo/tiedot/db"
 	//"github.com/davecgh/go-spew/spew"
 
 	"encoding/json"
 	"os"
+	"path"
 	"strings"
 )
 
@@ -46,19 +48,32 @@ type Support struct {
 }
 
 type Subtitles struct {
-	*Support // common support info
+	*Support        // common support info
+	KnownVideoMedia []VideoMedia
 }
+
+const (
+	// max number of media that can exist in a directory coincidently with a
+	// subtitles file to consider them associated (see findCandidates() case 3).
+	maxNumMediaAssocSubs int = 2
+)
 
 type SupportIndexID int
 
 const (
 	sxPath SupportIndexID = iota
+	sxDir
+	sxName
+	sxBase
 	sxCOUNT
 )
 
 var (
 	supportIndex = [sxCOUNT]*EntityIndex{
 		&EntityIndex{"AbsPath"}, // = sxPath (0)
+		&EntityIndex{"AbsDir"},  // = sxDir  (1)
+		&EntityIndex{"AbsName"}, // = sxBase (2)
+		&EntityIndex{"AbsBase"}, // = sxBase (3)
 	}
 )
 
@@ -77,8 +92,48 @@ func newSubtitles(lib *Library, absPath, relPath, ext, extName string, info os.F
 	support := newSupport(lib, skSubtitles, absPath, relPath, ext, extName, info)
 
 	return &Subtitles{
-		Support: support, // common support info
+		Support:         support, // common support info
+		KnownVideoMedia: []VideoMedia{},
 	}
+}
+
+func (s *Subtitles) addVideoMedia(col *db.Col, id int, update bool, vid *VideoMedia) (bool, *ReturnCode) {
+
+	var (
+		rec     *EntityRecord
+		recErr  *ReturnCode
+		vidSeen bool
+	)
+
+	// walk the current list of known videos, setting a flag if we have already
+	// seen this one before.
+	for _, v := range s.KnownVideoMedia {
+		if v.AbsPath == vid.AbsPath {
+			vidSeen = true
+			break
+		}
+	}
+	// append it to the list if we haven't seen it before.
+	if !vidSeen {
+		s.KnownVideoMedia = append(s.KnownVideoMedia, *vid)
+	}
+
+	// update the database record of this Subtitles to include the new
+	// video association. any subsequent queries should thus include it.
+	if rec, recErr = s.toRecord(); nil != recErr {
+		return false, recErr
+	}
+	if update {
+		if err := col.Update(id, *rec); nil != err {
+			return false, rcDatabaseError.specf(
+				"addVideoMedia(%s, %d, %s): failed to update record: %s", col, id, *vid, err)
+		}
+	}
+
+	// return true if and only if we added this subtitles reference to the list.
+	// return(ed) false if we've either seen it before or if there was an error
+	// somewhere (e.g. updating the database).
+	return !vidSeen, nil
 }
 
 // type SupportExt is a struct pairing SupportKind values to their corresponding
@@ -141,9 +196,18 @@ func supportKindOfFileExt(ext string) (SupportKind, string) {
 	return skUnknown, ""
 }
 
+func (s *Subtitles) isInSubtitlesSubdir() bool {
+
+	switch dirName := path.Base(s.AbsDir); strings.ToLower(dirName) {
+	case "sub", "subs", "subtitle", "subtitles", "vobsub", "srt":
+		return true
+	}
+	return false
+}
+
 // function toRecord() creates a struct capable of being stored in the database.
-// defines type Subtitles's implementation of the EntityRecord interface.
-func (m *Subtitles) toRecord() (*EntityRecord, *ReturnCode) {
+// defines type Subtitles's implementation of the StorableEntity interface.
+func (s *Subtitles) toRecord() (*EntityRecord, *ReturnCode) {
 
 	var (
 		record *EntityRecord = &EntityRecord{}
@@ -151,9 +215,9 @@ func (m *Subtitles) toRecord() (*EntityRecord, *ReturnCode) {
 		err    error
 	)
 
-	if data, err = json.Marshal(m); nil != err {
+	if data, err = json.Marshal(s); nil != err {
 		return nil, rcInvalidJSONData.specf(
-			"toRecord(): json.Marshal(%s): cannot marshal Subtitles struct into JSON object: %s", m, err)
+			"toRecord(): json.Marshal(%s): cannot marshal Subtitles struct into JSON object: %s", s, err)
 	}
 
 	if err = json.Unmarshal(data, record); nil != err {
@@ -165,23 +229,205 @@ func (m *Subtitles) toRecord() (*EntityRecord, *ReturnCode) {
 }
 
 // function fromRecord() creates a struct using the record stored in the
-// database. defines type Subtitles's implementation of the EntityRecord
+// database. defines type Subtitles's implementation of the StorableEntity
 // interface.
-func (m *Subtitles) fromRecord(data []byte) *ReturnCode {
+func (s *Subtitles) fromRecord(data []byte) *ReturnCode {
 
 	// Subtitles has an embedded Support struct -pointer- (not struct). so if we
 	// create a zeroized Subtitles, the embedded Support will be a null pointer.
 	// we can protect this method from that null pointer by creating a zeroized
 	// Support and updating Subtitles's embedded pointer to reference it.
-	if nil == m.Support {
-		m.Support = &Support{}
+	if nil == s.Support {
+		s.Support = &Support{}
 	}
 
 	// unmarshal our media object directly into the target
-	if err := json.Unmarshal(data, m); nil != err {
+	if err := json.Unmarshal(data, s); nil != err {
 		return rcInvalidJSONData.specf(
 			"fromRecord(): json.Unmarshal(%s): cannot unmarshal JSON object into Subtitles struct: %s", string(data), err)
 	}
 
 	return nil
+}
+
+func (s *Subtitles) fromID(col *db.Col, id int) *ReturnCode {
+
+	read, readErr := col.Read(id)
+	if nil != readErr {
+		return rcDatabaseError.specf(
+			"fromID(%s): db.Read(%d): cannot read record from database: %s",
+			col, id, readErr)
+	}
+
+	data, marshalErr := json.Marshal(read)
+	if nil != marshalErr {
+		return rcInvalidJSONData.specf(
+			"fromID(%s): json.Marshal(%s): cannot marshal query result into JSON object: %s",
+			col, read, marshalErr)
+	}
+
+	unmarshalErr := json.Unmarshal(data, s)
+	if nil != unmarshalErr {
+		return rcInvalidJSONData.specf(
+			"fromID(%s): json.Unmarshal(%s): cannot unmarshal JSON object into Subtitles struct: %s",
+			col, data, unmarshalErr)
+	}
+
+	return nil
+}
+
+// function findCandidates() scans the database for video media that appears to
+// be related to this subtitles file in some nominal/positional way. note that
+// the string evaluations are currently all case-sensitive comparisons. this is
+// a limitation of the database engine being used. if it becomes a significant
+// problem, we can create additional fields in the records that have a fixed,
+// known character case and use those fields for the queries.
+func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*VideoMedia, *ReturnCode) {
+
+	var (
+		queryResult map[int]struct{}
+		query       map[string]interface{}
+		addErr      *ReturnCode
+		added       bool
+	)
+
+	vidCol := lib.db.col[ecMedia][mkVideo]
+	subCol := lib.db.col[ecSupport][skSubtitles]
+	idx := lib.db.index[ecMedia]
+	candidate := []*VideoMedia{}
+
+	// ---
+	// first check: does the base name of the subtitles file match exactly with
+	// the base name of any media file?
+	//   e.g., "Foo.avi" <- "Foo.srt"
+
+	queryResult = make(map[int]struct{})
+	query = map[string]interface{}{
+		"eq": s.AbsBase,
+		"in": []interface{}{(*idx[mxBase])[0]},
+	}
+
+	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
+		return nil, rcQueryError.specf(
+			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
+	}
+
+	for id := range queryResult {
+		video := &VideoMedia{}
+		video.fromID(vidCol, id)
+		if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
+			return nil, addErr
+		}
+		if added {
+			infoLog.tracef("associated[1] subtitles (%q) with video: %q",
+				s.AbsName, video.Name)
+			candidate = append(candidate, video)
+		}
+	}
+
+	// ---
+	// second: does the subtitles file exist in a directory whose name matches
+	// exactly with the base name of any media file?
+	//   e.g., "/a/b/Foo/Foo.avi" <- "/a/b/Foo/Bar.srt"
+
+	queryResult = make(map[int]struct{})
+	query = map[string]interface{}{
+		"n": []interface{}{
+			map[string]interface{}{
+				"eq": s.AbsDir,
+				"in": []interface{}{(*idx[mxDir])[0]},
+			},
+			map[string]interface{}{
+				"eq": path.Base(s.AbsDir),
+				"in": []interface{}{(*idx[mxBase])[0]},
+			},
+		},
+	}
+
+	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
+		return nil, rcQueryError.specf(
+			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
+	}
+
+	for id := range queryResult {
+		video := &VideoMedia{}
+		video.fromID(vidCol, id)
+		if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
+			return nil, addErr
+		}
+		if added {
+			infoLog.tracef("associated[2] subtitles (%q) with video: %q",
+				s.AbsName, video.Name)
+			candidate = append(candidate, video)
+		}
+	}
+
+	// ---
+	// third: does the subtitles file exist in a directory that has <= N media
+	// files? using N is just a heuristic -- it prevents a subtitles file
+	// being selected for every video in a directory containing a large number
+	// of videos, but it also allows for subtitles to be selected when they
+	// exist in a directory containing very few media files yet don't have a
+	// consistent or similar base file name.
+	//   e.g. (N=2), {"Foo1.avi","Foo2.avi"} <- "Bar.srt"
+
+	queryResult = make(map[int]struct{})
+	query = map[string]interface{}{
+		"eq": s.AbsDir,
+		"in": []interface{}{(*idx[mxDir])[0]},
+	}
+
+	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
+		return nil, rcQueryError.specf(
+			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
+	}
+
+	if len(queryResult) <= maxNumMediaAssocSubs {
+		for id := range queryResult {
+			video := &VideoMedia{}
+			video.fromID(vidCol, id)
+			if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
+				return nil, addErr
+			}
+			if added {
+				infoLog.tracef("associated[3] subtitles (%q) with video: %q",
+					s.AbsName, video.Name)
+				candidate = append(candidate, video)
+			}
+		}
+	}
+
+	// ---
+	// fourth: do the subtitles exist in a directory with a common name for
+	// subtitles dirs and that subdir exists in the same dir as a media file?
+	//   e.g., "/a/b/Foo.avi" <- "/a/b/Subs/Bar.srt"
+
+	if s.isInSubtitlesSubdir() {
+
+		queryResult = make(map[int]struct{})
+		query = map[string]interface{}{
+			"eq": path.Dir(s.AbsDir),
+			"in": []interface{}{(*idx[mxDir])[0]},
+		}
+
+		if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
+			return nil, rcQueryError.specf(
+				"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
+		}
+
+		for id := range queryResult {
+			video := &VideoMedia{}
+			video.fromID(vidCol, id)
+			if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
+				return nil, addErr
+			}
+			if added {
+				infoLog.tracef("associated[4] subtitles (%q) with video: %q",
+					s.AbsName, video.Name)
+				candidate = append(candidate, video)
+			}
+		}
+	}
+
+	return candidate, nil
 }
