@@ -47,20 +47,22 @@ ldflags         = '$(ldflags-version)'
 
 # -- janitorial / cleanup targets ----------------------------------------------
 
-.PHONY: clean scrub sync-ripper-push sync-ripper-pull
+.PHONY: rinse clean scrub sync-ripper-push sync-ripper-pull
+
+rinse:
+	rm -rf "$(configpath)"
 
 clean:
 	rm -f "$(gopathsrc)/$(importpath)/$(project)"
 	rm -f "$(gopathbin)/$(project)"
 
-scrub: clean
-	rm -rf "$(configpath)"
+scrub: rinse clean
 
 sync-ripper-push:
-	rsync -rave ssh $(gopathsrc)/$(importpath)/ ardnew.com:$(shell ssh ripper 'echo $$GOPATH/src | sed -E "s|^$$HOME|~|"')/$(importpath)
+	rsync -rave 'ssh -p 2222 -l andrew' $(gopathsrc)/$(importpath)/ ardnew.com:$(shell ssh ripper 'echo $$GOPATH/src | sed -E "s|^$$HOME|~|"')/$(importpath)
 
 sync-ripper-pull:
-	rsync -rave ssh ardnew.com:$(shell ssh ripper 'echo $$GOPATH/src | sed -E "s|^$$HOME|~|"')/$(importpath)/ $(gopathsrc)/$(importpath)
+	rsync -rave 'ssh -p 2222 -l andrew' ardnew.com:$(shell ssh ripper 'echo $$GOPATH/src | sed -E "s|^$$HOME|~|"')/$(importpath)/ $(gopathsrc)/$(importpath)
 
 # -- compilation targets -------------------------------------------------------
 
