@@ -199,40 +199,46 @@ func (l *Library) String() string {
 	return fmt.Sprintf("{%q,%q,%s}", l.name, l.absPath, l.db)
 }
 
-type docData struct {
-	id   int
-	data []byte
-}
-
+// function recandidateSubtitles() attempts to find candidate VideoMedia in the
+// library for all Subtitles that are currently unassociated with any VideoMedia
+// objects. if force is true, then it attempts to find candidate VideoMedia for
+// ALL Subtitles objects and not only the orphaned/unassociated ones.
 func (l *Library) recandidateSubtitles(force bool) *ReturnCode {
 
-	orphan := []*docData{}
+	orphan := []RecordID{}
 
 	l.db.col[ecSupport][skSubtitles].ForEachDoc(
 		func(id int, data []byte) (willMoveOn bool) {
-			orphan = append(orphan, &docData{id: id, data: data})
+			subs := &Subtitles{}
+			subs.fromRecord(data)
+			if force || 0 >= len(subs.KnownVideoMedia) {
+				orphan = append(orphan, RecordID{id: id, rec: subs})
+			}
 			return true // move on to next record
 		})
 
-	for _, doc := range orphan {
-		subs := &Subtitles{}
-		subs.fromRecord(doc.data)
-		if force || 0 >= len(subs.KnownVideoMedia) {
-			infoLog.tracef("scanning media for subtitles: %s", subs)
-			if _, err := subs.findCandidates(l, doc.id, true); nil != err {
-				return err
-			}
+	for _, o := range orphan {
+		subs := o.rec.(*Subtitles)
+		infoLog.tracef("scanning media for subtitles: %s", subs)
+		if _, err := subs.findCandidates(l, true, o.id); nil != err {
+			return err
 		}
 	}
 
 	return nil
 }
 
+// function loadDive() performs the actual iterated loading of all objects in
+// this Library. as each object is instantiated using the data from the data
+// store, it is handed off to the load handler for handling by all subscribers.
 func (l *Library) loadDive(lh *LoadHandler, class EntityClass, kind int) (uint, *ReturnCode) {
 
 	var count uint = 0
 	var ret *ReturnCode = nil
 
+	// iterate over every record in the specified collection, unmarshalling the
+	// data stored in the database into a real, fully-typed and populated object
+	// before notifying the handler of what we found.
 	l.db.col[class][kind].ForEachDoc(
 		func(id int, data []byte) (willMoveOn bool) {
 			switch class {
@@ -314,7 +320,7 @@ func (l *Library) load(handler *LoadHandler) (uint, *ReturnCode) {
 		}
 		l.loadElapsed = time.Since(<-l.loadStart)
 
-		total, summary := l.db.totalMediaRecordsLoadString()
+		total, summary := l.db.totalRecordsString(dmLoad, int(ecMedia), -1)
 		if total > 0 {
 			infoLog.verbosef(
 				"finished loading: %q (%s loaded in %s)",
@@ -575,7 +581,7 @@ func (l *Library) scan(handler *ScanHandler) (uint, *ReturnCode) {
 		}
 		l.scanElapsed = time.Since(<-l.scanStart)
 
-		total, summary := l.db.totalMediaRecordsScanString()
+		total, summary := l.db.totalRecordsString(dmScan, int(ecMedia), -1)
 		if total > 0 {
 			infoLog.verbosef(
 				"finished scanning: %q (%s found in %s)",

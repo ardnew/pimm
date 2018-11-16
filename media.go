@@ -94,10 +94,9 @@ var (
 	}
 )
 
-// function newMedia() creates and initializes a new Media object. the kind
-// of media is determined automatically, and the MediaKind field is set
-// accordingly. so once the media has been identified, a type assertion can be
-// performed to handle the object appropriately and unambiguously.
+// function newMedia() creates and initializes a new Media object by invoking
+// the embedded types' constructors and then populating any unique
+// specialization fields.
 func newMedia(lib *Library, kind MediaKind, absPath, relPath, ext, extName string, info os.FileInfo) *Media {
 
 	entity := newEntity(lib, ecMedia, absPath, relPath, ext, extName, info)
@@ -114,6 +113,9 @@ func newMedia(lib *Library, kind MediaKind, absPath, relPath, ext, extName strin
 	}
 }
 
+// function newAudioMedia() creates and initializes a new AudioMedia object
+// by invoking the embedded types' constructors and then populating the unique
+// specialization fields.
 func newAudioMedia(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *AudioMedia {
 
 	media := newMedia(lib, mkAudio, absPath, relPath, ext, extName, info)
@@ -125,6 +127,9 @@ func newAudioMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 	}
 }
 
+// function newVideoMedia() creates and initializes a new VideoMedia object
+// by invoking the embedded types' constructors and then populating the unique
+// specialization fields.
 func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *VideoMedia {
 
 	media := newMedia(lib, mkVideo, absPath, relPath, ext, extName, info)
@@ -136,11 +141,11 @@ func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 	}
 }
 
-// function addSubtitles() adds the given subtitles to this VideoMedia object
+// function addSubtitles() adds the given Subtitles to this VideoMedia object
 // if and only if the subs do not already exist in the object's list of known
 // subtitles. additionally, the subs are optionally set as the preferred subs to
 // be used during playback; the database record of this video is also optionally
-// updated to include the subs in the list of known subtitles.
+// updated to store the subs in the list of known subtitles.
 func (m *VideoMedia) addSubtitles(vidCol, subCol *db.Col, vidID, subID int, update, preferred bool, subs *Subtitles) (bool, *ReturnCode) {
 
 	var (
@@ -337,6 +342,8 @@ func (m *AudioMedia) fromRecord(data []byte) *ReturnCode {
 	return nil
 }
 
+// function fromID() creates a concrete AudioMedia struct using the record
+// stored in the given collection with the given hash key id.
 func (m *AudioMedia) fromID(col *db.Col, id int) *ReturnCode {
 
 	read, readErr := col.Read(id)
@@ -408,6 +415,8 @@ func (m *VideoMedia) fromRecord(data []byte) *ReturnCode {
 	return nil
 }
 
+// function fromID() creates a concrete VideoMedia struct using the record
+// stored in the given collection with the given hash key id.
 func (m *VideoMedia) fromID(col *db.Col, id int) *ReturnCode {
 
 	read, readErr := col.Read(id)

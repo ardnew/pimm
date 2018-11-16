@@ -77,6 +77,9 @@ var (
 	}
 )
 
+// function newSupport() creates and initializes a new Support object by
+// invoking the embedded types' constructors and then populating any unique
+// specialization fields.
 func newSupport(lib *Library, kind SupportKind, absPath, relPath, ext, extName string, info os.FileInfo) *Support {
 
 	entity := newEntity(lib, ecSupport, absPath, relPath, ext, extName, info)
@@ -87,6 +90,9 @@ func newSupport(lib *Library, kind SupportKind, absPath, relPath, ext, extName s
 	}
 }
 
+// function newSubtitles() creates and initializes a new Subtitles object by
+// invoking the embedded types' constructors and then populating any unique
+// specialization fields.
 func newSubtitles(lib *Library, absPath, relPath, ext, extName string, info os.FileInfo) *Subtitles {
 
 	support := newSupport(lib, skSubtitles, absPath, relPath, ext, extName, info)
@@ -97,6 +103,10 @@ func newSubtitles(lib *Library, absPath, relPath, ext, extName string, info os.F
 	}
 }
 
+// function addVideoMedia() adds the given VideoMedia to this Subtitles object
+// if and only if the video does not already exist in the object's list of known
+// videos. additionally, the database record of these subtitles is also
+// optionally updated to store the video in the list of known VideoMedia.
 func (s *Subtitles) addVideoMedia(col *db.Col, id int, update bool, vid *VideoMedia) (bool, *ReturnCode) {
 
 	var (
@@ -196,6 +206,10 @@ func supportKindOfFileExt(ext string) (SupportKind, string) {
 	return skUnknown, ""
 }
 
+// function isInSubtitlesSubdir() inspects this subtitles file's absolute file
+// path to determine if its parent directory is one of the known, common names
+// typically used to store subtitles in a directory relative to the location of
+// a video media file.
 func (s *Subtitles) isInSubtitlesSubdir() bool {
 
 	switch dirName := path.Base(s.AbsDir); strings.ToLower(dirName) {
@@ -250,6 +264,8 @@ func (s *Subtitles) fromRecord(data []byte) *ReturnCode {
 	return nil
 }
 
+// function fromID() creates a concrete Subtitles struct using the record
+// stored in the given collection with the given hash key id.
 func (s *Subtitles) fromID(col *db.Col, id int) *ReturnCode {
 
 	read, readErr := col.Read(id)
@@ -277,12 +293,17 @@ func (s *Subtitles) fromID(col *db.Col, id int) *ReturnCode {
 }
 
 // function findCandidates() scans the database for video media that appears to
-// be related to this subtitles file in some nominal/positional way. note that
+// be related to this subtitles file in some nominal/positional way. [NOTE that
 // the string evaluations are currently all case-sensitive comparisons. this is
 // a limitation of the database engine being used. if it becomes a significant
 // problem, we can create additional fields in the records that have a fixed,
-// known character case and use those fields for the queries.
-func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*VideoMedia, *ReturnCode) {
+// known character case and use those fields for the queries.]
+// if argument update is true, then the database is updated to store all of the
+// bi-directional associations discovered between this Subtitles object and its
+// VideoMedia objects. the argument subID is the current doc ID of this
+// Subtitles object in the given library's subtitles table (only required if
+// update is true).
+func (s *Subtitles) findCandidates(lib *Library, update bool, subID int) ([]*VideoMedia, *ReturnCode) {
 
 	var (
 		queryResult map[int]struct{}
@@ -296,22 +317,18 @@ func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*Vid
 	idx := lib.db.index[ecMedia]
 	candidate := []*VideoMedia{}
 
-	// ---
 	// first check: does the base name of the subtitles file match exactly with
 	// the base name of any media file?
 	//   e.g., "Foo.avi" <- "Foo.srt"
-
 	queryResult = make(map[int]struct{})
 	query = map[string]interface{}{
 		"eq": s.AbsBase,
 		"in": []interface{}{(*idx[mxBase])[0]},
 	}
-
 	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
 		return nil, rcQueryError.specf(
 			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
 	}
-
 	for id := range queryResult {
 		video := &VideoMedia{}
 		video.fromID(vidCol, id)
@@ -325,11 +342,9 @@ func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*Vid
 		}
 	}
 
-	// ---
 	// second: does the subtitles file exist in a directory whose name matches
 	// exactly with the base name of any media file?
 	//   e.g., "/a/b/Foo/Foo.avi" <- "/a/b/Foo/Bar.srt"
-
 	queryResult = make(map[int]struct{})
 	query = map[string]interface{}{
 		"n": []interface{}{
@@ -343,12 +358,10 @@ func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*Vid
 			},
 		},
 	}
-
 	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
 		return nil, rcQueryError.specf(
 			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
 	}
-
 	for id := range queryResult {
 		video := &VideoMedia{}
 		video.fromID(vidCol, id)
@@ -362,7 +375,6 @@ func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*Vid
 		}
 	}
 
-	// ---
 	// third: does the subtitles file exist in a directory that has <= N media
 	// files? using N is just a heuristic -- it prevents a subtitles file
 	// being selected for every video in a directory containing a large number
@@ -370,18 +382,15 @@ func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*Vid
 	// exist in a directory containing very few media files yet don't have a
 	// consistent or similar base file name.
 	//   e.g. (N=2), {"Foo1.avi","Foo2.avi"} <- "Bar.srt"
-
 	queryResult = make(map[int]struct{})
 	query = map[string]interface{}{
 		"eq": s.AbsDir,
 		"in": []interface{}{(*idx[mxDir])[0]},
 	}
-
 	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
 		return nil, rcQueryError.specf(
 			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
 	}
-
 	if len(queryResult) <= maxNumMediaAssocSubs {
 		for id := range queryResult {
 			video := &VideoMedia{}
@@ -397,24 +406,19 @@ func (s *Subtitles) findCandidates(lib *Library, subID int, update bool) ([]*Vid
 		}
 	}
 
-	// ---
 	// fourth: do the subtitles exist in a directory with a common name for
 	// subtitles dirs and that subdir exists in the same dir as a media file?
 	//   e.g., "/a/b/Foo.avi" <- "/a/b/Subs/Bar.srt"
-
 	if s.isInSubtitlesSubdir() {
-
 		queryResult = make(map[int]struct{})
 		query = map[string]interface{}{
 			"eq": path.Dir(s.AbsDir),
 			"in": []interface{}{(*idx[mxDir])[0]},
 		}
-
 		if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
 			return nil, rcQueryError.specf(
 				"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
 		}
-
 		for id := range queryResult {
 			video := &VideoMedia{}
 			video.fromID(vidCol, id)

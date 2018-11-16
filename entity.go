@@ -74,6 +74,9 @@ type StorableEntity interface {
 	fromID(*db.Col, int) *ReturnCode
 }
 
+// function newEntity() creates a new file object that serves as the fundamental
+// type constituting any sort of file capable of being referenced on the file
+// system. this includes media files, supporting auxiliary files, etc.
 func newEntity(lib *Library, class EntityClass, absPath, relPath, ext, extName string, info os.FileInfo) *Entity {
 
 	// the lack of file name extension abstracts any encoding info from the
@@ -96,6 +99,8 @@ func newEntity(lib *Library, class EntityClass, absPath, relPath, ext, extName s
 	}
 }
 
+// function String() creates a string representation of the Entity for easy
+// identification in logs.
 func (e *Entity) String() string {
 	path := e.AbsPath
 	if "" != e.RelPath && len(e.RelPath) < len(e.AbsPath) {

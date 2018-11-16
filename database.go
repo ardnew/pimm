@@ -165,6 +165,14 @@ type Database struct {
 	timeCreated    time.Time               // only set if the db was newly created, else IsZero() will return true
 }
 
+// type RecordID offers a tuple object storing any given type with an integer ID
+// which tiedot uses as its primary (hash) key for locating records in any given
+// collection.
+type RecordID struct {
+	id  int
+	rec interface{}
+}
+
 // function newDatabase() creates a new high-level database object through
 // which all of the persistent storage operations should be performed.
 func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) {
@@ -329,19 +337,18 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 	return base, nil
 }
 
-// creates a string representation of the Database for easy identification in
-// logs.
+// function String() creates a string representation of the Database for easy
+// identification in logs.
 func (d *Database) String() string {
 	return fmt.Sprintf("{%q,%s}", d.dataDir, d.name)
 }
 
-func (d *Database) totalMediaRecordsLoadString() (uint, string) {
-	return d.totalRecordsString(dmLoad, ecMedia, -1)
-}
-func (d *Database) totalMediaRecordsScanString() (uint, string) {
-	return d.totalRecordsString(dmScan, ecMedia, -1)
-}
-func (d *Database) totalRecordsString(m DiscoverMethod, c EntityClass, k int) (uint, string) {
+// function totalRecordsString() constructs a human-readable string describing
+// the total number of entity records (as indicated by the Database object's
+// counter fields) of a given class c and kind k. if class and/or kind is a
+// negative value, then include all classes and/or kinds, respectively.
+// also returned is the total sum, indiscriminated by class or kind.
+func (d *Database) totalRecordsString(m DiscoverMethod, c int, k int) (uint, string) {
 
 	var numRecords *[ecCOUNT][]uint
 	switch m {
@@ -384,6 +391,11 @@ func (d *Database) close() (bool, *ReturnCode) {
 	return true, nil
 }
 
+// function isFirstAppearance() inspects this Database's timeCreated field to
+// determine if the data store was just created for the first time during this
+// invocation of the program. the timeCreated (time.Time) field remains its
+// initial zero-value if the Database already existed on disk and we are loading
+// from it before we begin to (potentially) populate it.
 func (d *Database) isFirstAppearance() bool {
 	return !d.timeCreated.IsZero()
 }
