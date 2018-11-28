@@ -207,16 +207,28 @@ func supportKindOfFileExt(ext string) (SupportKind, string) {
 }
 
 // function isInSubtitlesSubdir() inspects this subtitles file's absolute file
-// path to determine if its parent directory is one of the known, common names
-// typically used to store subtitles in a directory relative to the location of
-// a video media file.
-func (s *Subtitles) isInSubtitlesSubdir() bool {
+// path to determine if one of its parent directories is one of the known,
+// common names typically used to store subtitles in a directory relative to the
+// location of a video media file. if found, an absolute path to the parent of
+// the deepest matching directory found is returned.
+func (s *Subtitles) isInSubtitlesSubdir() (bool, string) {
 
-	switch dirName := path.Base(s.AbsDir); strings.ToLower(dirName) {
-	case "sub", "subs", "subtitle", "subtitles", "vobsub", "srt":
-		return true
+	dir := strings.Split(s.AbsDir, pathSep)
+	for i := len(dir) - 1; i >= 0; i-- {
+		switch name := dir[i]; strings.ToLower(name) {
+		case "sub", "subs", "subtitle", "subtitles", "vobsub", "srt":
+			if i > 1 {
+				return true, strings.Join(dir[:i], pathSep)
+			} else {
+				if i > 0 {
+					return true, pathSep
+				} else {
+					return true, currDir
+				}
+			}
+		}
 	}
-	return false
+	return false, ""
 }
 
 // function toRecord() creates a struct capable of being stored in the database.
@@ -307,7 +319,7 @@ func (s *Subtitles) findCandidates(lib *Library, update bool, subID int) ([]*Vid
 
 	var (
 		queryResult map[int]struct{}
-		query       map[string]interface{}
+		query       []interface{}
 		addErr      *ReturnCode
 		added       bool
 	)
@@ -317,14 +329,43 @@ func (s *Subtitles) findCandidates(lib *Library, update bool, subID int) ([]*Vid
 	idx := lib.db.index[ecMedia]
 	candidate := []*VideoMedia{}
 
-	// first check: does the base name of the subtitles file match exactly with
-	// the base name of any media file?
-	//   e.g., "Foo.avi" <- "Foo.srt"
 	queryResult = make(map[int]struct{})
-	query = map[string]interface{}{
-		"eq": s.AbsBase,
-		"in": []interface{}{(*idx[mxBase])[0]},
+	query = []interface{}{
+		// first check: does the base name of the subtitles file match exactly with
+		// the base name of any media file?
+		//   e.g., "Foo.avi" <- "Foo.srt"
+		map[string]interface{}{
+			"eq": s.AbsBase,
+			"in": []interface{}{(*idx[mxBase])[0]},
+		},
+		// second: does the subtitles file exist in a directory whose name matches
+		// exactly with the base name of any media file?
+		//   e.g., "/a/b/Foo/Foo.avi" <- "/a/b/Foo/Bar.srt"
+		map[string]interface{}{
+			"n": []interface{}{
+				map[string]interface{}{
+					"eq": s.AbsDir,
+					"in": []interface{}{(*idx[mxDir])[0]},
+				},
+				map[string]interface{}{
+					"eq": path.Base(s.AbsDir),
+					"in": []interface{}{(*idx[mxBase])[0]},
+				},
+			},
+		},
 	}
+
+	// third: do the subtitles exist in a directory with a common name for
+	// subtitles dirs and that subdir exists in the same dir as a media file?
+	//   e.g., "/a/b/Foo.avi" <- "/a/b/Subs/Bar.srt"
+	if found, dir := s.isInSubtitlesSubdir(); found {
+		query = append(query,
+			map[string]interface{}{
+				"eq": dir,
+				"in": []interface{}{(*idx[mxDir])[0]},
+			})
+	}
+
 	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
 		return nil, rcQueryError.specf(
 			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
@@ -336,99 +377,46 @@ func (s *Subtitles) findCandidates(lib *Library, update bool, subID int) ([]*Vid
 			return nil, addErr
 		}
 		if added {
-			infoLog.tracef("associated[1] subtitles (%q) with video: %q",
+			infoLog.tracef("associated subtitles (%q, [type-a]) with video: %q",
 				s.AbsName, video.Name)
 			candidate = append(candidate, video)
 		}
 	}
 
-	// second: does the subtitles file exist in a directory whose name matches
-	// exactly with the base name of any media file?
-	//   e.g., "/a/b/Foo/Foo.avi" <- "/a/b/Foo/Bar.srt"
-	queryResult = make(map[int]struct{})
-	query = map[string]interface{}{
-		"n": []interface{}{
+	// only continue on with an additional query if we still haven't found any
+	// candidates yet. otherwise, trust that one of the other methods have a far
+	// more likely candidate.
+	if 0 == len(candidate) {
+		// fourth: does the subtitles file exist in a directory that has <= N media
+		// files? using N is just a heuristic -- it prevents a subtitles file
+		// being selected for every video in a directory containing a large number
+		// of videos, but it also allows for subtitles to be selected when they
+		// exist in a directory containing very few media files yet don't have a
+		// consistent or similar base file name.
+		//   e.g. (N=2), {"Foo1.avi","Foo2.avi"} <- "Bar.srt"
+		queryResult = make(map[int]struct{})
+		query = []interface{}{
 			map[string]interface{}{
 				"eq": s.AbsDir,
 				"in": []interface{}{(*idx[mxDir])[0]},
 			},
-			map[string]interface{}{
-				"eq": path.Base(s.AbsDir),
-				"in": []interface{}{(*idx[mxBase])[0]},
-			},
-		},
-	}
-	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
-		return nil, rcQueryError.specf(
-			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
-	}
-	for id := range queryResult {
-		video := &VideoMedia{}
-		video.fromID(vidCol, id)
-		if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
-			return nil, addErr
-		}
-		if added {
-			infoLog.tracef("associated[2] subtitles (%q) with video: %q",
-				s.AbsName, video.Name)
-			candidate = append(candidate, video)
-		}
-	}
-
-	// third: does the subtitles file exist in a directory that has <= N media
-	// files? using N is just a heuristic -- it prevents a subtitles file
-	// being selected for every video in a directory containing a large number
-	// of videos, but it also allows for subtitles to be selected when they
-	// exist in a directory containing very few media files yet don't have a
-	// consistent or similar base file name.
-	//   e.g. (N=2), {"Foo1.avi","Foo2.avi"} <- "Bar.srt"
-	queryResult = make(map[int]struct{})
-	query = map[string]interface{}{
-		"eq": s.AbsDir,
-		"in": []interface{}{(*idx[mxDir])[0]},
-	}
-	if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
-		return nil, rcQueryError.specf(
-			"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
-	}
-	if len(queryResult) <= maxNumMediaAssocSubs {
-		for id := range queryResult {
-			video := &VideoMedia{}
-			video.fromID(vidCol, id)
-			if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
-				return nil, addErr
-			}
-			if added {
-				infoLog.tracef("associated[3] subtitles (%q) with video: %q",
-					s.AbsName, video.Name)
-				candidate = append(candidate, video)
-			}
-		}
-	}
-
-	// fourth: do the subtitles exist in a directory with a common name for
-	// subtitles dirs and that subdir exists in the same dir as a media file?
-	//   e.g., "/a/b/Foo.avi" <- "/a/b/Subs/Bar.srt"
-	if s.isInSubtitlesSubdir() {
-		queryResult = make(map[int]struct{})
-		query = map[string]interface{}{
-			"eq": path.Dir(s.AbsDir),
-			"in": []interface{}{(*idx[mxDir])[0]},
 		}
 		if err := db.EvalQuery(query, vidCol, &queryResult); nil != err {
 			return nil, rcQueryError.specf(
 				"findCandidates(%s): EvalQuery({%s, %s}): %s", lib, s.AbsBase, *idx[mxBase], err)
 		}
-		for id := range queryResult {
-			video := &VideoMedia{}
-			video.fromID(vidCol, id)
-			if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
-				return nil, addErr
-			}
-			if added {
-				infoLog.tracef("associated[4] subtitles (%q) with video: %q",
-					s.AbsName, video.Name)
-				candidate = append(candidate, video)
+		if len(queryResult) <= maxNumMediaAssocSubs {
+			for id := range queryResult {
+				video := &VideoMedia{}
+				video.fromID(vidCol, id)
+				if added, addErr = video.addSubtitles(vidCol, subCol, id, subID, update, false, s); nil != addErr {
+					return nil, addErr
+				}
+				if added {
+					infoLog.tracef("associated subtitles (%q, [type-b]) with video: %q",
+						s.AbsName, video.Name)
+					candidate = append(candidate, video)
+				}
 			}
 		}
 	}

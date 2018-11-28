@@ -348,7 +348,7 @@ func (d *Database) String() string {
 // counter fields) of a given class c and kind k. if class and/or kind is a
 // negative value, then include all classes and/or kinds, respectively.
 // also returned is the total sum, indiscriminated by class or kind.
-func (d *Database) totalRecordsString(m DiscoverMethod, c int, k int) (uint, string) {
+func (d *Database) totalRecordsString(m DiscoveryMethod, c int, k int) (uint, string) {
 
 	var numRecords *[ecCOUNT][]uint
 	switch m {
@@ -370,11 +370,13 @@ func (d *Database) totalRecordsString(m DiscoverMethod, c int, k int) (uint, str
 			if !(int(k) == kind || k < 0) {
 				continue
 			}
-			if len(desc) > 0 {
-				desc = fmt.Sprintf("%s, ", desc)
+			if count[kind] > 0 {
+				total += count[kind]
+				if len(desc) > 0 {
+					desc = fmt.Sprintf("%s, ", desc)
+				}
+				desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
 			}
-			total += count[kind]
-			desc = fmt.Sprintf("%s%d %s", desc, count[kind], strings.ToLower(name))
 		}
 	}
 	return total, desc
@@ -464,5 +466,4 @@ func (d *Database) scrub() {
 			col[kind] = d.store.Use(name)
 		}
 	}
-
 }

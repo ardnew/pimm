@@ -13,6 +13,8 @@ importpath = ardnew.com/$(project)
 gopathsrc  = $(GOPATH)/src
 gopathbin  = $(GOPATH)/bin
 
+runverbose = -verbose
+
 # -- define version info with version control ----------------------------------
 
 version   = 0.1
@@ -76,7 +78,10 @@ install:
 
 # -- test / evaluation targets -------------------------------------------------
 
-.PHONY: debug
+.PHONY: debug-single-lib debug-dual-lib
 
-debug: install
-	dlv exec $(project) -- -verbose /mnt/SG4TB-NIX
+debug-single-lib: install
+	dlv exec $(project) -- $(runverbose) /mnt/SG4TB-NIX
+
+debug-dual-lib: install
+	dlv exec $(project) -- $(runverbose) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv

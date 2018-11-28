@@ -36,9 +36,8 @@ type Library struct {
 	dataDir string    // directory containing all known library databases
 	db      *Database // database containing all known media in this library
 
-	newMedia     chan *Discovery // media discovery
-	newDirectory chan *Discovery // subdirectory discovery
-	newSupport   chan *Discovery // support file discovery
+	newMedia   chan *Discovery // media discovery
+	newSupport chan *Discovery // support file discovery
 
 	loadComplete chan bool      // synchronization lock
 	loadStart    chan time.Time // counting semaphore to limit number of concurrent loaders
@@ -49,15 +48,12 @@ type Library struct {
 	scanElapsed  time.Duration  // measures time elapsed for scan to complete (use internally, not thread-safe!)
 }
 
-// type PathHandler represents a function that accepts a *Library, file path,
+// type PathHandlerFunc represents a function that accepts a Library, file path,
 // and variable number of additional arguments. this is intended for use by the
-// function scanDive()/loadDive() when they encounter files and directories.
-type PathHandler func(*Library, string, ...interface{})
-type ScanHandler struct {
-	handleEnter, handleExit, handleMedia, handleSupport, handleOther PathHandler
-}
-type LoadHandler struct {
-	handleMedia, handleSupport, handleOther PathHandler
+// functions scanDive()/loadDive() when they encounter files and directories.
+type PathHandlerFunc func(*Library, string, ...interface{})
+type PathHandler struct {
+	handleMedia, handleSupport, handleOther PathHandlerFunc
 }
 
 // type ExtTable is a mapping of the name of file types to their common file
@@ -83,13 +79,13 @@ func kindOfFileExt(table *ExtTable, ext string) (string, bool) {
 }
 
 // type DiscoveryMethod represents the method by which media is located.
-type DiscoverMethod int
+type DiscoveryMethod int
 
 const (
-	dmUnknown DiscoverMethod = iota - 1 // = -1
-	dmLoad                              // = 0 loaded from database
-	dmScan                              // = 1 found by file system traversal
-	dmCOUNT                             // = 2
+	dmUnknown DiscoveryMethod = iota - 1 // = -1
+	dmLoad                               // = 0 loaded from database
+	dmScan                               // = 1 found by file system traversal
+	dmCOUNT                              // = 2
 )
 
 // type Discovery represents any sort of file entity discovered during a file
@@ -179,9 +175,8 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		db:      db,
 
 		// channels for communicating scanner data to the main thread.
-		newMedia:     make(chan *Discovery),
-		newDirectory: make(chan *Discovery),
-		newSupport:   make(chan *Discovery),
+		newMedia:   make(chan *Discovery),
+		newSupport: make(chan *Discovery),
 
 		loadComplete: make(chan bool),
 		loadStart:    make(chan time.Time, maxLibraryScanners),
@@ -206,6 +201,7 @@ func (l *Library) String() string {
 func (l *Library) recandidateSubtitles(force bool) *ReturnCode {
 
 	orphan := []RecordID{}
+	remain := []RecordID{}
 
 	l.db.col[ecSupport][skSubtitles].ForEachDoc(
 		func(id int, data []byte) (willMoveOn bool) {
@@ -217,12 +213,21 @@ func (l *Library) recandidateSubtitles(force bool) *ReturnCode {
 			return true // move on to next record
 		})
 
-	for _, o := range orphan {
-		subs := o.rec.(*Subtitles)
-		infoLog.tracef("scanning media for subtitles: %s", subs)
-		if _, err := subs.findCandidates(l, true, o.id); nil != err {
-			return err
+	numOrphan := len(orphan)
+	if numOrphan > 0 {
+		warnLog.tracef("identified %d orphan subtitles in \"%s\" (unassociated with any media)", numOrphan, l.name)
+		for _, o := range orphan {
+			subs := o.rec.(*Subtitles)
+			infoLog.tracef("scanning media for subtitles: %s", subs)
+			vid, err := subs.findCandidates(l, true, o.id)
+			if nil != err {
+				return err
+			}
+			if 0 == len(vid) {
+				remain = append(remain, o)
+			}
 		}
+		warnLog.tracef("still unable to associate %d orphan subtitles with any media. consider renaming or moving the files to something more conventional.", len(remain))
 	}
 
 	return nil
@@ -231,7 +236,7 @@ func (l *Library) recandidateSubtitles(force bool) *ReturnCode {
 // function loadDive() performs the actual iterated loading of all objects in
 // this Library. as each object is instantiated using the data from the data
 // store, it is handed off to the load handler for handling by all subscribers.
-func (l *Library) loadDive(lh *LoadHandler, class EntityClass, kind int) (uint, *ReturnCode) {
+func (l *Library) loadDive(ph *PathHandler, class EntityClass, kind int) (uint, *ReturnCode) {
 
 	var count uint = 0
 	var ret *ReturnCode = nil
@@ -248,15 +253,15 @@ func (l *Library) loadDive(lh *LoadHandler, class EntityClass, kind int) (uint, 
 					audio := &AudioMedia{}
 					audio.fromRecord(data)
 					infoLog.tracef("loaded audio (ID:%d): %s", id, audio)
-					if nil != lh && nil != lh.handleMedia {
-						lh.handleMedia(l, audio.AbsPath, audio, id)
+					if nil != ph && nil != ph.handleMedia {
+						ph.handleMedia(l, audio.AbsPath, audio, id)
 					}
 				case mkVideo:
 					video := &VideoMedia{}
 					video.fromRecord(data)
 					infoLog.tracef("loaded video (ID:%d): %s", id, video)
-					if nil != lh && nil != lh.handleMedia {
-						lh.handleMedia(l, video.AbsPath, video, id)
+					if nil != ph && nil != ph.handleMedia {
+						ph.handleMedia(l, video.AbsPath, video, id)
 					}
 				default:
 				}
@@ -266,8 +271,8 @@ func (l *Library) loadDive(lh *LoadHandler, class EntityClass, kind int) (uint, 
 					subs := &Subtitles{}
 					subs.fromRecord(data)
 					infoLog.tracef("loaded subtitles (ID:%d): %s", id, subs)
-					if nil != lh && nil != lh.handleSupport {
-						lh.handleSupport(l, subs.AbsPath, skSubtitles, subs, id)
+					if nil != ph && nil != ph.handleSupport {
+						ph.handleSupport(l, subs.AbsPath, skSubtitles, subs, id)
 					}
 				default:
 				}
@@ -283,7 +288,7 @@ func (l *Library) loadDive(lh *LoadHandler, class EntityClass, kind int) (uint, 
 // function load() is the entry point for initiating a load on the library's
 // backing data store. currently, the load is dispatched and cannot be safely
 // interruped. you must wait for the load to finish before restarting.
-func (l *Library) load(handler *LoadHandler) (uint, *ReturnCode) {
+func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 
 	var (
 		numLoad uint = 0 // number of known files loaded from database
@@ -320,7 +325,7 @@ func (l *Library) load(handler *LoadHandler) (uint, *ReturnCode) {
 		}
 		l.loadElapsed = time.Since(<-l.loadStart)
 
-		total, summary := l.db.totalRecordsString(dmLoad, int(ecMedia), -1)
+		total, summary := l.db.totalRecordsString(dmLoad, -1 /*int(ecMedia)*/, -1)
 		if total > 0 {
 			infoLog.verbosef(
 				"finished loading: %q (%s loaded in %s)",
@@ -347,7 +352,7 @@ func (l *Library) load(handler *LoadHandler) (uint, *ReturnCode) {
 // function scanDive() is the recursive step for the file system traversal,
 // invoked initially by function scan(). error codes generated in this routine
 // will be returned to the caller of scanDive() -and- the caller of scan().
-func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnCode {
+func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnCode {
 
 	// get a path to the file relative to the library root dir (useful for
 	// displaying diagnostic info to the user).
@@ -389,26 +394,14 @@ func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnC
 				"scanDive(%q, %d): dir.Readdirnames(): %s", dispPath, depth, err)
 		}
 
-		// don't add the library path itself to its list of subdirectories.
-		if depth > 1 {
-			// fire the on-enter-directory event handler.
-			if nil != sh && nil != sh.handleEnter {
-				sh.handleEnter(l, absPath, nil)
-			}
-		}
-
 		// recursively scan all of this subdirectory's contents.
 		var scanErr *ReturnCode
 		for _, name := range dirName {
-			scanErr = l.scanDive(sh, path.Join(absPath, name), depth+1)
+			scanErr = l.scanDive(ph, path.Join(absPath, name), depth+1)
 			if nil != scanErr {
 				// a file/subdir of the current directory threw an error.
 				warnLog.verbose(scanErr)
 			}
-		}
-		// fire the on-exit-directory event handler.
-		if nil != sh && nil != sh.handleExit {
-			sh.handleExit(l, absPath, nil)
 		}
 		return nil
 
@@ -467,8 +460,8 @@ func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnC
 					if id, insErr := ac.Insert(*rec); nil == insErr {
 						l.db.numRecordsScan[ecMedia][kind]++
 						infoLog.tracef("discovered audio: %s", audio)
-						if nil != sh && nil != sh.handleMedia {
-							sh.handleMedia(l, absPath, audio, id)
+						if nil != ph && nil != ph.handleMedia {
+							ph.handleMedia(l, absPath, audio, id)
 						}
 					} else {
 						return rcDatabaseError.specf(
@@ -493,8 +486,8 @@ func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnC
 					if id, insErr := vc.Insert(*rec); nil == insErr {
 						l.db.numRecordsScan[ecMedia][kind]++
 						infoLog.tracef("discovered video: %s", video)
-						if nil != sh && nil != sh.handleMedia {
-							sh.handleMedia(l, absPath, video, id)
+						if nil != ph && nil != ph.handleMedia {
+							ph.handleMedia(l, absPath, video, id)
 						}
 					} else {
 						return rcDatabaseError.specf(
@@ -523,8 +516,8 @@ func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnC
 						if id, insErr := sc.Insert(*rec); nil == insErr {
 							l.db.numRecordsScan[ecSupport][kind]++
 							infoLog.tracef("discovered subtitles: %s", subs)
-							if nil != sh && nil != sh.handleSupport {
-								sh.handleSupport(l, absPath, skSubtitles, subs, id)
+							if nil != ph && nil != ph.handleSupport {
+								ph.handleSupport(l, absPath, skSubtitles, subs, id)
 							}
 						} else {
 							return rcDatabaseError.specf(
@@ -538,8 +531,8 @@ func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnC
 			default:
 				// cannot identify the file, probably an undesirable piece of
 				// trash. well-suited for being ignored.
-				if nil != sh && nil != sh.handleOther {
-					sh.handleOther(l, absPath)
+				if nil != ph && nil != ph.handleOther {
+					ph.handleOther(l, absPath)
 				}
 			}
 		}
@@ -550,7 +543,7 @@ func (l *Library) scanDive(sh *ScanHandler, absPath string, depth uint) *ReturnC
 // function scan() is the entry point for initiating a scan on the library's
 // root file system. currently, the scan is dispatched and cannot be safely
 // interruped. you must wait for the scan to finish before restarting.
-func (l *Library) scan(handler *ScanHandler) (uint, *ReturnCode) {
+func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 
 	var (
 		numScan uint = 0 // number of -new- files discovered on file system
@@ -581,7 +574,7 @@ func (l *Library) scan(handler *ScanHandler) (uint, *ReturnCode) {
 		}
 		l.scanElapsed = time.Since(<-l.scanStart)
 
-		total, summary := l.db.totalRecordsString(dmScan, int(ecMedia), -1)
+		total, summary := l.db.totalRecordsString(dmScan, -1 /*int(ecMedia)*/, -1)
 		if total > 0 {
 			infoLog.verbosef(
 				"finished scanning: %q (%s found in %s)",

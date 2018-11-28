@@ -18,6 +18,7 @@ import (
 	//"github.com/davecgh/go-spew/spew"
 
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -139,6 +140,21 @@ func newVideoMedia(lib *Library, absPath, relPath, ext, extName string, info os.
 		KnownSubtitles: []Subtitles{}, // absolute path to all associated subtitles
 		Subtitles:      Subtitles{},   // absolute path to selected subtitles
 	}
+}
+
+func (m *VideoMedia) String() string {
+	s := m.Entity.String()
+	if len(m.KnownSubtitles) > 0 {
+		t := ""
+		for i, u := range m.KnownSubtitles {
+			if i > 0 {
+				t = fmt.Sprintf("%s, ", t)
+			}
+			t = fmt.Sprintf("%s[%d:\"%s\"]", t, i, u.RelPath)
+		}
+		s = fmt.Sprintf("%s Subtitles:{%s}", s, t)
+	}
+	return s
 }
 
 // function addSubtitles() adds the given Subtitles to this VideoMedia object

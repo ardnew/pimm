@@ -408,7 +408,7 @@ func populateLibrary(options *Options, library []*Library) {
 		go func(l *Library) {
 			if !l.db.isFirstAppearance() {
 				count, loadErr := l.load(
-					&LoadHandler{
+					&PathHandler{
 						// the loader identified some file in a subdirectory of
 						// the library's file system as a media file.
 						handleMedia: func(l *Library, p string, v ...interface{}) {
@@ -439,16 +439,7 @@ func populateLibrary(options *Options, library []*Library) {
 		go func(l *Library) {
 			<-l.loadComplete
 			count, scanErr := l.scan(
-				&ScanHandler{
-					// the scanner entered a subdirectory of the library's file
-					// system.
-					handleEnter: func(l *Library, p string, v ...interface{}) {
-						l.newDirectory <- newDiscovery(p)
-					},
-					// the scanner exited a subdirectory of the library's file
-					// system.
-					handleExit: func(l *Library, p string, v ...interface{}) {
-					},
+				&PathHandler{
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as a media file.
 					handleMedia: func(l *Library, p string, v ...interface{}) {
@@ -493,7 +484,6 @@ func watchLibrary(lib *Library) {
 		//       has already finished with whatever it was doing, so the data
 		//       should be fully initialized and ready to be handled.
 		select {
-		case /* v := */ <-lib.newDirectory:
 		case /* v := */ <-lib.newMedia:
 		case /* v := */ <-lib.newSupport:
 		default:

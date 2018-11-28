@@ -106,6 +106,6 @@ func (e *Entity) String() string {
 	if "" != e.RelPath && len(e.RelPath) < len(e.AbsPath) {
 		path = e.RelPath
 	}
-	return fmt.Sprintf("%s [%s (%s)] (%d bytes) %v",
+	return fmt.Sprintf("\"%s\" [%s (%s)] (%d bytes) %v",
 		path, e.ExtName, e.Ext, e.Size, e.TimeModified)
 }

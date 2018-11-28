@@ -28,6 +28,7 @@ import (
 const (
 	newLine = "\r\n"
 	pathSep = "\\"
+	currDir = "."
 )
 
 // function homeDir() returns the path to the user's home directory as defined
