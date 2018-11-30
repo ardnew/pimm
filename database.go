@@ -250,8 +250,8 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 			// "tiedot". if another database is used, be sure to revisit this.
 			if equals, _ := jdc.equals(jdcPrev); !equals {
 				errLog.logf(
-					"you must delete the current database (%q) and rescan the "+
-						"library to use a different database configuration. "+
+					"you must delete the current database (%q) and rescan the " +
+						"library to use a different database configuration. " +
 						"otherwise, please remove one or more of the "+
 						"following command-line options: %s", path, csv)
 				return nil, rcDatabaseError.specf(

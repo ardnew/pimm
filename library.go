@@ -400,7 +400,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 			scanErr = l.scanDive(ph, path.Join(absPath, name), depth+1)
 			if nil != scanErr {
 				// a file/subdir of the current directory threw an error.
-				warnLog.verbose(scanErr)
+				warnLog.trace(scanErr)
 			}
 		}
 		return nil

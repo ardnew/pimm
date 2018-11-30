@@ -149,11 +149,19 @@ func main() {
 		errLog.die(err, false)
 	}
 
+	// if no options were provided and no config file exists, then we are
+	// totally lost and confused. display usage and bail out.
+	config := options.Config.string
+	configExists, _ := goutil.PathExists(config)
+	if !configExists && len(os.Args) <= 1 {
+		options.Usage()
+		errLog.die(rcUsage, false)
+	}
+
 	// create the directory hierarchy that will store our configuration data
 	// permanently on disk.
 	configDir := configDir(options)
-	config := options.Config.string
-	if exists, _ := goutil.PathExists(config); !exists {
+	if !configExists {
 		if dirExists, _ := goutil.PathExists(configDir); !dirExists {
 			if err := os.MkdirAll(configDir, os.ModePerm); nil != err {
 				errLog.die(rcInvalidConfig.specf(
@@ -167,6 +175,8 @@ func main() {
 	}
 
 	// if we haven't died yet, then config dir/file exists. load it.
+	// NOTE: be careful not to overwrite any config options that were already
+	//       provided via command line as those should always take precedence!
 	infoLog.tracef("(TBD) -- loading configuration: %q", config)
 
 	// create the directory hierarchy that will store our libraries' backing
@@ -461,6 +471,10 @@ func populateLibrary(options *Options, library []*Library) {
 			}
 			if numMedia[l] += count; 0 == numMedia[l] {
 				warnLog.logf("no media in %q: library is empty!", l.name)
+				if !isVerboseLog && !isTraceLog {
+					warnLog.logf("try using program options -%s or -%s for more info",
+						options.Verbose.name, options.Trace.name)
+				}
 			}
 			l.scanComplete <- true
 
