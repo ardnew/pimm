@@ -96,6 +96,7 @@ var (
 	// flags used by loggers -only- for determining verbosity
 	isVerboseLog bool
 	isTraceLog   bool
+	isCLIMode    bool
 
 	rawLog  *ConsoleLog = consoleLog[liRaw]
 	infoLog *ConsoleLog = consoleLog[liInfo]
@@ -120,19 +121,39 @@ func (l *ConsoleLog) setWriter(w io.Writer) {
 	}
 }
 
+// function setWriterAll() changes the log writer using the setWriter() method
+// defined above for all standard ConsoleWriters.
+func setWriterAll(w io.Writer) {
+	for _, c := range consoleLog {
+		c.setWriter(w)
+	}
+}
+
 // function output() outputs a given string s, with an optional delimiter d,
 // using the current properties of the target logger. this function is the final
 // stop in the call stack for all of the logging subroutines exported by this
-// unit, so any global formatting should be performed here.
+// unit, so any global formatting or handling should be performed here.
 func (l *ConsoleLog) output(d, s string) {
 	if true /* toggles printing globally */ {
+
+		qprint := func(m string) {
+
+			if nil != uiApp && !isCLIMode {
+				uiApp.QueueUpdateDraw(func() {
+					l.Print(m)
+				})
+			}
+		}
+
 		if l != rawLog {
 			if d == "" {
 				d = logDelimNormal
 			}
-			l.Print(fmt.Sprintf("%s%s", d, s))
+			//l.Print(fmt.Sprintf("%s%s", d, s))
+			qprint(fmt.Sprintf("%s%s", d, s))
 		} else {
-			l.Print(s)
+			//l.Print(s)
+			qprint(s)
 		}
 	}
 }

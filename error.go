@@ -62,6 +62,7 @@ var (
 	rcDuplicateLibrary = newReturnCode(rkWarn, errorOffset+11, "duplicate library", "")          // duplicate; library path already being handled
 	rcInvalidJSONData  = newReturnCode(rkWarn, errorOffset+12, "invalid JSON data", "")          // cannot handle some JSON-related data object
 	rcQueryError       = newReturnCode(rkWarn, errorOffset+13, "failed to query database", "")   // couldn't perform query on database collection
+	rcTUIError         = newReturnCode(rkError, errorOffset+14, "error drawing screen", "")      // some sort of error when drawing screen buffer
 	rcUnknown          = newReturnCode(rkError, maxReturnCode, "unknown error", "")              // unanticipated error encountered
 )
 

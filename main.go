@@ -84,6 +84,7 @@ type Options struct {
 	Trace     *Option // prints very detailed status information
 	Config    *Option // defines path to config file
 	LibData   *Option // defines data directory path (where to store databases)
+	CLIMode   *Option // defines the type of UI to use: CLI or TUI
 
 	DiskBufferSize *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
 	HashBufferSize *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
@@ -153,7 +154,7 @@ func main() {
 	// totally lost and confused. display usage and bail out.
 	config := options.Config.string
 	configExists, _ := goutil.PathExists(config)
-	if !configExists && len(os.Args) <= 1 {
+	if !configExists && len(os.Args) < 1 {
 		options.Usage()
 		errLog.die(rcUsage, false)
 	}
@@ -179,6 +180,12 @@ func main() {
 	//       provided via command line as those should always take precedence!
 	infoLog.tracef("(TBD) -- loading configuration: %q", config)
 
+	// we don't wait for the scanning to finish. go ahead and launch the UI for
+	// progress indicators and anything else the user can get away with while
+	// they work.
+	layout := newLayout()
+	setWriterAll(layout.log.TextView)
+
 	// create the directory hierarchy that will store our libraries' backing
 	// data stores permanently on disk.
 	libData := options.LibData.string
@@ -202,20 +209,26 @@ func main() {
 		errLog.die(rcInvalidConfig.spec("no valid libraries provided"), false)
 	}
 
-	// -------------------------------------------------------------------------
-
 	// libraries ready, spool up the library scanners.
 	scanStart := time.Now()
 	populateLibrary(options, library)
 
-	for _, l := range library {
-		<-l.scanComplete
+	go func(lib []*Library, start time.Time) {
+
+		for _, l := range lib {
+			<-l.scanComplete
+		}
+		scanElapsed := time.Since(start)
+		infoLog.logf("initialization complete (%s)", scanElapsed.Round(time.Millisecond))
+
+	}(library, scanStart)
+
+	if errCode := layout.show(); nil != errCode {
+		infoLog.die(errCode, false)
+	} else {
+		infoLog.die(rcOK.spec(greeting()), false)
 	}
 
-	scanElapsed := time.Since(scanStart)
-	infoLog.logf("initialization complete (%s)", scanElapsed.Round(time.Millisecond))
-
-	infoLog.die(rcOK.spec(greeting()), false)
 }
 
 // function providedDBConfig() checks the "Provided" hash of the Options struct
@@ -295,6 +308,10 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage:  "path to library data directory (database storage location)",
 			string: libDataPath,
 		},
+		CLIMode: &Option{
+			name:  "cli",
+			usage: "disables the curses-style textual user interface, falling back to basic terminal I/O.\n mostly useful only for deugging",
+		},
 		DiskBufferSize: &Option{
 			name:  "diskbuffersize",
 			usage: "size (in bytes) of each library's preallocated on-disk buffers (number of buffers = number of CPU cores)\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
@@ -312,6 +329,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 		"trace":          options.Trace,
 		"config":         options.Config,
 		"libdata":        options.LibData,
+		"cli":            options.CLIMode,
 		"diskbuffersize": options.DiskBufferSize,
 		"hashbuffersize": options.HashBufferSize,
 	}
@@ -322,6 +340,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
 	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
+	options.BoolVar(&options.CLIMode.bool, options.CLIMode.name, options.CLIMode.bool, options.CLIMode.usage)
 	options.IntVar(&options.DiskBufferSize.int, options.DiskBufferSize.name, options.DiskBufferSize.int, options.DiskBufferSize.usage)
 	options.IntVar(&options.HashBufferSize.int, options.HashBufferSize.name, options.HashBufferSize.int, options.HashBufferSize.usage)
 
@@ -354,6 +373,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 	// update the loggers' verbosity settings.
 	isVerboseLog = options.Verbose.bool
 	isTraceLog = options.Trace.bool
+	isCLIMode = options.CLIMode.bool
 
 	return options, parseError
 }
@@ -480,10 +500,6 @@ func populateLibrary(options *Options, library []*Library) {
 
 		}(lib)
 	}
-
-	// we don't wait for the scanning to finish. go ahead and launch the UI for
-	// progress indicators and anything else the user can get away with while
-	// they work.
 }
 
 // function watchLibrary() is the dispatched goroutine that listens for and
