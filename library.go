@@ -175,8 +175,8 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		db:      db,
 
 		// channels for communicating scanner data to the main thread.
-		newMedia:   make(chan *Discovery),
-		newSupport: make(chan *Discovery),
+		newMedia:   make(chan *Discovery, opt.DiscoveryBufferSize.int),
+		newSupport: make(chan *Discovery, opt.DiscoveryBufferSize.int),
 
 		loadComplete: make(chan bool),
 		loadStart:    make(chan time.Time, maxLibraryScanners),
@@ -252,14 +252,14 @@ func (l *Library) loadDive(ph *PathHandler, class EntityClass, kind int) (uint, 
 				case mkAudio:
 					audio := &AudioMedia{}
 					audio.fromRecord(data)
-					infoLog.tracef("loaded audio (ID:%d): %s", id, audio)
+					infoLog.tracef("loaded audio (ID={%q,%X}): %s", l.name, id, audio)
 					if nil != ph && nil != ph.handleMedia {
 						ph.handleMedia(l, audio.AbsPath, audio, id)
 					}
 				case mkVideo:
 					video := &VideoMedia{}
 					video.fromRecord(data)
-					infoLog.tracef("loaded video (ID:%d): %s", id, video)
+					infoLog.tracef("loaded video (ID={%q,%X}): %s", l.name, id, video)
 					if nil != ph && nil != ph.handleMedia {
 						ph.handleMedia(l, video.AbsPath, video, id)
 					}
@@ -270,7 +270,7 @@ func (l *Library) loadDive(ph *PathHandler, class EntityClass, kind int) (uint, 
 				case skSubtitles:
 					subs := &Subtitles{}
 					subs.fromRecord(data)
-					infoLog.tracef("loaded subtitles (ID:%d): %s", id, subs)
+					infoLog.tracef("loaded subtitles (ID={%q,%X}): %s", l.name, id, subs)
 					if nil != ph && nil != ph.handleSupport {
 						ph.handleSupport(l, subs.AbsPath, skSubtitles, subs, id)
 					}
@@ -459,7 +459,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 				if rec, recErr := audio.toRecord(); nil == recErr {
 					if id, insErr := ac.Insert(*rec); nil == insErr {
 						l.db.numRecordsScan[ecMedia][kind]++
-						infoLog.tracef("discovered audio: %s", audio)
+						infoLog.tracef("discovered audio (ID={%q,%X}): %s", l.name, id, audio)
 						if nil != ph && nil != ph.handleMedia {
 							ph.handleMedia(l, absPath, audio, id)
 						}
@@ -485,7 +485,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 				if rec, recErr := video.toRecord(); nil == recErr {
 					if id, insErr := vc.Insert(*rec); nil == insErr {
 						l.db.numRecordsScan[ecMedia][kind]++
-						infoLog.tracef("discovered video: %s", video)
+						infoLog.tracef("discovered video (ID={%q,%X}): %s", l.name, id, video)
 						if nil != ph && nil != ph.handleMedia {
 							ph.handleMedia(l, absPath, video, id)
 						}
@@ -515,7 +515,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 					if rec, recErr := subs.toRecord(); nil == recErr {
 						if id, insErr := sc.Insert(*rec); nil == insErr {
 							l.db.numRecordsScan[ecSupport][kind]++
-							infoLog.tracef("discovered subtitles: %s", subs)
+							infoLog.tracef("discovered subtitles (ID={%q,%X}): %s", l.name, id, subs)
 							if nil != ph && nil != ph.handleSupport {
 								ph.handleSupport(l, absPath, skSubtitles, subs, id)
 							}

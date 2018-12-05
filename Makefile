@@ -13,7 +13,7 @@ importpath = ardnew.com/$(project)
 gopathsrc  = $(GOPATH)/src
 gopathbin  = $(GOPATH)/bin
 
-runverbose = -verbose
+runverbose = -trace
 
 # -- define version info with version control ----------------------------------
 
@@ -85,3 +85,17 @@ debug-single-lib: install
 
 debug-dual-lib: install
 	dlv exec $(project) -- $(runverbose) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+
+# -- profiling targets ---------------------------------------------------------
+
+.PHONY: profile-single-lib profile-dual-lib
+
+profile-single-lib: scrub build
+	go test -args -verbose /mnt/SG4TB-NIX
+
+	go tool pprof --pdf $(project) ./cpu.pprof > cpu-prof.pdf
+
+profile-dual-lib: scrub build
+	go test -args -verbose /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+
+	go tool pprof --pdf $(project) ./cpu.pprof > cpu-prof.pdf

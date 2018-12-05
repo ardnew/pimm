@@ -27,8 +27,9 @@ import (
 // streams of the user's console. the different loggers use different streams
 // and various prefixes to distinguish between benign and fatal messages.
 type ConsoleLog struct {
-	prefix string
-	writer io.Writer
+	prefix  string
+	console io.Writer
+	writer  io.Writer
 	*log.Logger
 	sync.Mutex
 }
@@ -107,7 +108,13 @@ var (
 // function newConsoleLog() creates a new ConsoleLog struct with the given
 // args as fields and a new sync.Mutex semaphore all its very own.
 func newConsoleLog(prefix string, writer io.Writer, logger *log.Logger) *ConsoleLog {
-	return &ConsoleLog{prefix, writer, logger, *new(sync.Mutex)}
+	return &ConsoleLog{
+		prefix:  prefix,
+		console: writer, // retain this as a fallback, don't ever overwrite.
+		writer:  writer,
+		Logger:  logger,
+		Mutex:   *new(sync.Mutex),
+	}
 }
 
 // function setWriter() changes the log writer to anything conforming to the
@@ -129,31 +136,39 @@ func setWriterAll(w io.Writer) {
 	}
 }
 
+// function resetWriter() changes the log writer using the setWriter() method
+// defined above to the default console IO stream. this is useful for returning
+// a logger back to the shell session from which it launched.
+func (l *ConsoleLog) resetWriter() {
+	l.setWriter(l.console)
+}
+
+// function resetWriterAll() restores all of the log writers back to their
+// default console IO stream. see function resetWriter().
+func resetWriterAll() {
+	for _, c := range consoleLog {
+		c.resetWriter()
+	}
+}
+
 // function output() outputs a given string s, with an optional delimiter d,
 // using the current properties of the target logger. this function is the final
 // stop in the call stack for all of the logging subroutines exported by this
 // unit, so any global formatting or handling should be performed here.
 func (l *ConsoleLog) output(d, s string) {
 	if true /* toggles printing globally */ {
-
-		qprint := func(m string) {
-
-			if nil != uiApp && !isCLIMode {
-				uiApp.QueueUpdateDraw(func() {
-					l.Print(m)
-				})
-			}
-		}
-
 		if l != rawLog {
 			if d == "" {
 				d = logDelimNormal
 			}
-			//l.Print(fmt.Sprintf("%s%s", d, s))
-			qprint(fmt.Sprintf("%s%s", d, s))
+			s = fmt.Sprintf("%s%s", d, s)
+		}
+		if nil != uiApp && !isCLIMode {
+			// queue the print into tview's draw cycle
+			uiApp.QueueUpdateDraw(func() { l.Print(s) })
 		} else {
-			//l.Print(s)
-			qprint(s)
+			// print directly to the console log
+			l.Print(s)
 		}
 	}
 }
@@ -175,7 +190,7 @@ func (l *ConsoleLog) logf(format string, v ...interface{}) {
 // function verbose() is a wrapper for function log() that will prevent the
 // data from being output unless the verbose or trace flags are set.
 func (l *ConsoleLog) verbose(v ...interface{}) {
-	if isVerboseLog || isTraceLog {
+	if isVerboseLog || isTraceLog || !areOptionsParsed {
 		s := fmt.Sprint(v...)
 		l.output(logDelimVerbose, s)
 	}
@@ -184,7 +199,7 @@ func (l *ConsoleLog) verbose(v ...interface{}) {
 // function verbosef() is a wrapper for function logf() that will prevent the
 // data from being output unless the verbose or trace flags are set.
 func (l *ConsoleLog) verbosef(format string, v ...interface{}) {
-	if isVerboseLog || isTraceLog {
+	if isVerboseLog || isTraceLog || !areOptionsParsed {
 		s := fmt.Sprintf(format, v...)
 		l.output(logDelimVerbose, s)
 	}
@@ -193,7 +208,7 @@ func (l *ConsoleLog) verbosef(format string, v ...interface{}) {
 // function trace() is a wrapper for function log() that will prevent the
 // data from being output unless the trace flag is set.
 func (l *ConsoleLog) trace(v ...interface{}) {
-	if isTraceLog {
+	if isTraceLog || !areOptionsParsed {
 		s := fmt.Sprint(v...)
 		l.output(logDelimTrace, s)
 	}
@@ -202,7 +217,7 @@ func (l *ConsoleLog) trace(v ...interface{}) {
 // function tracef() is a wrapper for function logf() that will prevent the
 // data from being output unless the trace flag is set.
 func (l *ConsoleLog) tracef(format string, v ...interface{}) {
-	if isTraceLog {
+	if isTraceLog || !areOptionsParsed {
 		s := fmt.Sprintf(format, v...)
 		l.output(logDelimTrace, s)
 	}
@@ -220,8 +235,12 @@ func (l *ConsoleLog) logStackTrace() {
 }
 
 // function die() outputs the details of a given ReturnCode object, and then
-// terminates program execution with the ReturnCode object's return value.
+// terminates program execution with the ReturnCode object's return value. the
+// output from this method is always printed to the terminal regardless of
+// whichever io.Writer was defined for the logger.
 func (l *ConsoleLog) die(c *ReturnCode, trace bool) {
+	l.resetWriter()
+	isCLIMode = true
 	if rcUsage != c {
 		s := fmt.Sprintf("%s", error(c))
 		l.output("", s)

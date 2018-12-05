@@ -195,7 +195,7 @@ func (m *VideoMedia) addSubtitles(vidCol, subCol *db.Col, vidID, subID int, upda
 	if update {
 		if err := vidCol.Update(vidID, *rec); nil != err {
 			return false, rcDatabaseError.specf(
-				"addSubtitles(%s, %d, %s): failed to update record: %s", vidCol, vidID, *subs, err)
+				"addSubtitles(%v, %d, %s): failed to update record: %s", vidCol, vidID, *subs, err)
 		}
 	}
 
@@ -365,21 +365,21 @@ func (m *AudioMedia) fromID(col *db.Col, id int) *ReturnCode {
 	read, readErr := col.Read(id)
 	if nil != readErr {
 		return rcDatabaseError.specf(
-			"fromID(%s): db.Read(%d): cannot read record from database: %s",
+			"fromID(%v): db.Read(%d): cannot read record from database: %s",
 			col, id, readErr)
 	}
 
 	data, marshalErr := json.Marshal(read)
 	if nil != marshalErr {
 		return rcInvalidJSONData.specf(
-			"fromID(%s): json.Marshal(%s): cannot marshal query result into JSON object: %s",
+			"fromID(%v): json.Marshal(%s): cannot marshal query result into JSON object: %s",
 			col, read, marshalErr)
 	}
 
 	unmarshalErr := json.Unmarshal(data, m)
 	if nil != unmarshalErr {
 		return rcInvalidJSONData.specf(
-			"fromID(%s): json.Unmarshal(%s): cannot unmarshal JSON object into AudioMedia struct: %s",
+			"fromID(%v): json.Unmarshal(%s): cannot unmarshal JSON object into AudioMedia struct: %s",
 			col, data, unmarshalErr)
 	}
 
@@ -438,21 +438,21 @@ func (m *VideoMedia) fromID(col *db.Col, id int) *ReturnCode {
 	read, readErr := col.Read(id)
 	if nil != readErr {
 		return rcDatabaseError.specf(
-			"fromID(%s): db.Read(%d): cannot read record from database: %s",
+			"fromID(%v): db.Read(%d): cannot read record from database: %s",
 			col, id, readErr)
 	}
 
 	data, marshalErr := json.Marshal(read)
 	if nil != marshalErr {
 		return rcInvalidJSONData.specf(
-			"fromID(%s): json.Marshal(%s): cannot marshal query result into JSON object: %s",
+			"fromID(%v): json.Marshal(%s): cannot marshal query result into JSON object: %s",
 			col, read, marshalErr)
 	}
 
 	unmarshalErr := json.Unmarshal(data, m)
 	if nil != unmarshalErr {
 		return rcInvalidJSONData.specf(
-			"fromID(%s): json.Unmarshal(%s): cannot unmarshal JSON object into VideoMedia struct: %s",
+			"fromID(%v): json.Unmarshal(%s): cannot unmarshal JSON object into VideoMedia struct: %s",
 			col, data, unmarshalErr)
 	}
 

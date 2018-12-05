@@ -52,7 +52,7 @@ var (
 // type JSONDataConfig defines all of tiedot's configurable paramters for
 // initial index and cache sizes
 type JSONDataConfig struct {
-	options        *Options `json:"-"`              // not stored in the json data
+	options        *Options // not stored in the json data
 	MaxRecordSize  int      `json:"DocMaxRoom"`     // <=- maximum size of a single document that will ever be accepted into database.
 	DiskBufferSize int      `json:"ColFileGrowth"`  // <=- size (in bytes) of each collection's pre-allocated files.
 	HashBucketSize int      `json:"PerBucket"`      // number of entries pre-allocated to each hash table bucket.
@@ -250,8 +250,8 @@ func newDatabase(opt *Options, abs string, dat string) (*Database, *ReturnCode) 
 			// "tiedot". if another database is used, be sure to revisit this.
 			if equals, _ := jdc.equals(jdcPrev); !equals {
 				errLog.logf(
-					"you must delete the current database (%q) and rescan the " +
-						"library to use a different database configuration. " +
+					"you must delete the current database (%q) and rescan the "+
+						"library to use a different database configuration. "+
 						"otherwise, please remove one or more of the "+
 						"following command-line options: %s", path, csv)
 				return nil, rcDatabaseError.specf(

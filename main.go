@@ -21,13 +21,19 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
 	"time"
 )
 
 // unexported constants
 const (
-	defaultConfigPath  = "config"
-	defaultLibDataPath = "library.db"
+	defaultCPUProfileName      = "cpu.prof"
+	defaultMEMProfileName      = "mem.prof"
+	defaultConfigPath          = "config"
+	defaultLibDataPath         = "library.db"
+	defaultUIUpdateInterval    = "500ms"
+	defaultDiscoveryBufferSize = 4096
 )
 
 // versioning information defined by compiler switches in Makefile.
@@ -43,6 +49,11 @@ var (
 	adjBad = [...]string{"an atrocious", "a bad", "an awful", "a cheap", "a crummy", "a dreadful", "a lousy", "a poor", "a rough", "a sad", "an unacceptable", "a blah", "a bummer", "a diddly", "a downer", "a garbage", "a gross", "an imperfect", "an inferior", "a junky", "a synthetic", "an abominable", "an amiss", "a bad news", "a beastly", "a bottom out", "a careless", "a cheesy", "a crappy", "a cruddy", "a defective", "a deficient", "a dissatisfactory", "an erroneous", "a fallacious", "a faulty", "a godawful", "a grody", "a grungy", "an icky", "an inadequate", "an incorrect", "a not good", "an off", "a raunchy", "a slipshod", "a stinking", "a substandard", "an unsatisfactory"}
 )
 
+// various globals that should not be written to from outside this unit.
+var (
+	areOptionsParsed bool = false
+)
+
 // type Option struct can contain any possible individual option configuration
 // including its command line flag identifier and usage info..
 type Option struct {
@@ -53,6 +64,7 @@ type Option struct {
 	uint
 	float64
 	string
+	time.Duration
 }
 
 // type TimeInterval struct contains a start and end time (together with a
@@ -79,6 +91,11 @@ type Options struct {
 
 	Provided NamedOption // which options were provided by the user at runtime
 
+	CPUProfile     *Option // flag indicating CPU profiling should be performed
+	CPUProfileName *Option // name of file to store pprof data of CPU profiler
+	MEMProfile     *Option // flag indicating MEM profiling should be performed
+	MEMProfileName *Option // name of file to store pprof data of MEM profiler
+
 	UsageHelp *Option // shows usage synopsis
 	Verbose   *Option // prints additional status information
 	Trace     *Option // prints very detailed status information
@@ -88,6 +105,9 @@ type Options struct {
 
 	DiskBufferSize *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
 	HashBufferSize *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
+
+	UIUpdateInterval    *Option // the interval in which the UI checks for new files in the discovery buffer
+	DiscoveryBufferSize *Option // size (file count) of discovery channel buffers
 }
 
 // function configDir() constructs the full path to the directory containing all
@@ -142,21 +162,55 @@ func greeting() string {
 // function main() is the program entry point, obviously.
 func main() {
 
-	infoLog.verbose("parsing options ...")
+	defer func() {
+		if r := recover(); nil != r {
+			switch r.(type) {
+			case *ReturnCode:
+				c := r.(*ReturnCode)
+				switch c {
+				// non-errors, normal cleanup and exit
+				case rcOK, rcUsage:
+					infoLog.die(c, false)
+				// common errors, not unusual enough reason for stack trace
+				case rcInvalidConfig:
+					errLog.die(c, false)
+				// all other errors not specifically handled above
+				default:
+					errLog.die(c, true)
+				}
+			}
+		}
+	}()
+
+	var layout *Layout = nil
+	var initComplete chan bool = make(chan bool)
 
 	// parse options and command line arguments.
 	options, err := initOptions()
 	if nil != err {
-		errLog.die(err, false)
+		panic(err)
+	}
+
+	// create the CPU profiler output if requested.
+	if options.CPUProfile.bool && "" != options.CPUProfileName.string {
+		infoLog.verbosef("writing CPU profile: %q", options.CPUProfileName.string)
+		f, err := os.Create(options.CPUProfileName.string)
+		if err != nil {
+			panic(rcInvalidFile.specf("could not create CPU profile: ", err))
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			panic(rcInvalidFile.specf("could not start CPU profile: ", err))
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	// if no options were provided and no config file exists, then we are
 	// totally lost and confused. display usage and bail out.
 	config := options.Config.string
 	configExists, _ := goutil.PathExists(config)
-	if !configExists && len(os.Args) < 1 {
+	if !configExists && len(os.Args) <= 1 {
 		options.Usage()
-		errLog.die(rcUsage, false)
+		panic(rcUsage)
 	}
 
 	// create the directory hierarchy that will store our configuration data
@@ -165,8 +219,8 @@ func main() {
 	if !configExists {
 		if dirExists, _ := goutil.PathExists(configDir); !dirExists {
 			if err := os.MkdirAll(configDir, os.ModePerm); nil != err {
-				errLog.die(rcInvalidConfig.specf(
-					"cannot create configuration directory: %q: %s", configDir, err), false)
+				panic(rcInvalidConfig.specf(
+					"cannot create configuration directory: %q: %s", configDir, err))
 			}
 			infoLog.tracef("created configuration directory: %q", configDir)
 		}
@@ -180,21 +234,22 @@ func main() {
 	//       provided via command line as those should always take precedence!
 	infoLog.tracef("(TBD) -- loading configuration: %q", config)
 
-	// we don't wait for the scanning to finish. go ahead and launch the UI for
-	// progress indicators and anything else the user can get away with while
-	// they work.
-	layout := newLayout()
-	setWriterAll(layout.log.TextView)
+	// initialize the UI if we aren't running in CLI-only mode. associate the
+	// loggers with the navigable log viewer.
+	if !isCLIMode {
+		layout = newLayout()
+		setWriterAll(layout.log.TextView)
+	}
 
 	// create the directory hierarchy that will store our libraries' backing
 	// data stores permanently on disk.
 	libData := options.LibData.string
 	if exists, _ := goutil.PathExists(libData); !exists {
 		if err := os.MkdirAll(libData, os.ModePerm); nil != err {
-			errLog.die(rcInvalidConfig.specf(
-				"cannot create library data directory: %q: %s", libData, err), false)
+			panic(rcInvalidConfig.specf(
+				"cannot create library data directory: %q: %s", libData, err))
 		}
-		infoLog.tracef("created library data directory: %q", libData)
+		infoLog.tracef("created panbiblio data directory: %q", libData)
 	} else {
 		infoLog.tracef("(TBD) -- loading data from library data directory: %q", libData)
 	}
@@ -206,7 +261,7 @@ func main() {
 	// before assuming valid ones exist for traversal.
 	library := initLibrary(options)
 	if 0 == len(library) {
-		errLog.die(rcInvalidConfig.spec("no valid libraries provided"), false)
+		panic(rcInvalidConfig.spec("no valid libraries provided"))
 	}
 
 	// libraries ready, spool up the library scanners.
@@ -220,15 +275,36 @@ func main() {
 		}
 		scanElapsed := time.Since(start)
 		infoLog.logf("initialization complete (%s)", scanElapsed.Round(time.Millisecond))
+		initComplete <- true
 
 	}(library, scanStart)
 
-	if errCode := layout.show(); nil != errCode {
-		infoLog.die(errCode, false)
+	// we don't wait for the scanning to finish. go ahead and launch the UI for
+	// progress indicators and anything else the user can get away with while
+	// the scanners/loaders work.
+	if !isCLIMode {
+		if errCode := layout.show(); nil != errCode {
+			panic(errCode)
+		}
 	} else {
-		infoLog.die(rcOK.spec(greeting()), false)
+		<-initComplete
 	}
 
+	// create the memory profiler output if requested
+	if options.MEMProfile.bool && "" != options.MEMProfileName.string {
+		infoLog.verbosef("writing memory profile: %q", options.MEMProfileName.string)
+		f, err := os.Create(options.MEMProfileName.string)
+		if err != nil {
+			panic(rcInvalidFile.specf("could not create memory profile: ", err))
+		}
+		runtime.GC() // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			panic(rcInvalidFile.specf("could not write memory profile: ", err))
+		}
+		f.Close()
+	}
+
+	panic(rcOK.spec(greeting()))
 }
 
 // function providedDBConfig() checks the "Provided" hash of the Options struct
@@ -256,8 +332,10 @@ func (o *Options) providedDBConfig() (bool, []string) {
 // environment.
 func initOptions() (options *Options, err *ReturnCode) {
 
-	// panic handler
 	defer func() {
+		areOptionsParsed = true
+
+		// panic handler
 		if recovered := recover(); nil != recovered {
 			options = nil
 			if flag.ErrHelp == recovered {
@@ -283,6 +361,27 @@ func initOptions() (options *Options, err *ReturnCode) {
 		// override by printing with our error logger.
 		FlagSet:  flag.NewFlagSet(identity, flag.PanicOnError),
 		Provided: NamedOption{},
+
+		CPUProfile: &Option{
+			name:  "cpuprofile",
+			usage: "flag indicating CPU profiling should be performed",
+			bool:  false,
+		},
+		CPUProfileName: &Option{
+			name:   "cpuprofilename",
+			usage:  "path to file to store pprof data of CPU profiler",
+			string: filepath.Join(os.Getenv("PWD"), defaultCPUProfileName),
+		},
+		MEMProfile: &Option{
+			name:  "memprofile",
+			usage: "flag indicating MEM profiling should be performed",
+			bool:  false,
+		},
+		MEMProfileName: &Option{
+			name:   "memprofilename",
+			usage:  "path to file to store pprof data of MEM profiler",
+			string: filepath.Join(os.Getenv("PWD"), defaultMEMProfileName),
+		},
 		UsageHelp: &Option{
 			name:  "help",
 			usage: "display this helpful usage synopsis!",
@@ -298,6 +397,11 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage: "display additional status information (maximum verbosity)",
 			bool:  false,
 		},
+		CLIMode: &Option{
+			name:  "cli",
+			usage: "disables the curses-style textual user interface, falling back to basic terminal I/O. useful when deugging.",
+			bool:  false,
+		},
 		Config: &Option{
 			name:   "config",
 			usage:  "path to config file",
@@ -307,10 +411,6 @@ func initOptions() (options *Options, err *ReturnCode) {
 			name:   "libdata",
 			usage:  "path to library data directory (database storage location)",
 			string: libDataPath,
-		},
-		CLIMode: &Option{
-			name:  "cli",
-			usage: "disables the curses-style textual user interface, falling back to basic terminal I/O.\n mostly useful only for deugging",
 		},
 		DiskBufferSize: &Option{
 			name:  "diskbuffersize",
@@ -322,27 +422,49 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage: "size (in bytes) by which each hash table will grow to make room once it reaches capacity\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
 			int:   defaultHashBufferSize,
 		},
+		UIUpdateInterval: &Option{
+			name:   "uiupdateinterval",
+			usage:  "the interval (in human-readable form, e.g. the following are all valid and equivalent: \"1500ms\" = \"1.5s\" = \"1s500ms\") in which new files in the discovery buffers are retrieved and notified to the user or added to the UI. this option is closely related to option -discoverybuffersize and may adversely affect performance since insufficient update frequency will result in the discovery buffers filling to capacity and thus block the media scanners from continuing (until this update operation frees up space in the buffer).",
+			string: defaultUIUpdateInterval, //"ns", "us" (or "µs"), "ms", "s", "m", "h"
+		},
+		DiscoveryBufferSize: &Option{
+			name:  "discoverybuffersize",
+			usage: "the size (in number of file references) of the file discovery buffers. once this buffer reaches capacity, the media discovery operations will halt and wait for the update interval (see -uiupdateinterval) to elapse and empty the buffers before resuming.",
+			int:   defaultDiscoveryBufferSize,
+		},
 	}
 	knownOptions := NamedOption{
-		"help":           options.UsageHelp,
-		"verbose":        options.Verbose,
-		"trace":          options.Trace,
-		"config":         options.Config,
-		"libdata":        options.LibData,
-		"cli":            options.CLIMode,
-		"diskbuffersize": options.DiskBufferSize,
-		"hashbuffersize": options.HashBufferSize,
+		"cpuprofile":          options.CPUProfile,
+		"cpuprofilename":      options.CPUProfileName,
+		"memprofile":          options.MEMProfile,
+		"memprofilename":      options.MEMProfileName,
+		"help":                options.UsageHelp,
+		"verbose":             options.Verbose,
+		"trace":               options.Trace,
+		"cli":                 options.CLIMode,
+		"config":              options.Config,
+		"libdata":             options.LibData,
+		"diskbuffersize":      options.DiskBufferSize,
+		"hashbuffersize":      options.HashBufferSize,
+		"uiupdateinterval":    options.UIUpdateInterval,
+		"discoverybuffersize": options.DiscoveryBufferSize,
 	}
 
 	// register the command line options we want to handle.
+	options.BoolVar(&options.CPUProfile.bool, options.CPUProfile.name, options.CPUProfile.bool, options.CPUProfile.usage)
+	options.StringVar(&options.CPUProfileName.string, options.CPUProfileName.name, options.CPUProfileName.string, options.CPUProfileName.usage)
+	options.BoolVar(&options.MEMProfile.bool, options.MEMProfile.name, options.MEMProfile.bool, options.MEMProfile.usage)
+	options.StringVar(&options.MEMProfileName.string, options.MEMProfileName.name, options.MEMProfileName.string, options.MEMProfileName.usage)
 	options.BoolVar(&options.UsageHelp.bool, options.UsageHelp.name, options.UsageHelp.bool, options.UsageHelp.usage)
 	options.BoolVar(&options.Verbose.bool, options.Verbose.name, options.Verbose.bool, options.Verbose.usage)
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
+	options.BoolVar(&options.CLIMode.bool, options.CLIMode.name, options.CLIMode.bool, options.CLIMode.usage)
 	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
-	options.BoolVar(&options.CLIMode.bool, options.CLIMode.name, options.CLIMode.bool, options.CLIMode.usage)
 	options.IntVar(&options.DiskBufferSize.int, options.DiskBufferSize.name, options.DiskBufferSize.int, options.DiskBufferSize.usage)
 	options.IntVar(&options.HashBufferSize.int, options.HashBufferSize.name, options.HashBufferSize.int, options.HashBufferSize.usage)
+	options.StringVar(&options.UIUpdateInterval.string, options.UIUpdateInterval.name, options.UIUpdateInterval.string, options.UIUpdateInterval.usage)
+	options.IntVar(&options.DiscoveryBufferSize.int, options.DiscoveryBufferSize.name, options.DiscoveryBufferSize.int, options.DiscoveryBufferSize.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
 	// display our own.
@@ -362,7 +484,12 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.Visit(
 		func(f *flag.Flag) { options.Provided[f.Name] = knownOptions[f.Name] })
 
-	var parseError *ReturnCode
+	// update the loggers' verbosity settings.
+	isVerboseLog = options.Verbose.bool
+	isTraceLog = options.Trace.bool
+	isCLIMode = options.CLIMode.bool
+
+	var parseError *ReturnCode = nil
 
 	// update program state for global optons.
 	if options.UsageHelp.bool {
@@ -370,10 +497,16 @@ func initOptions() (options *Options, err *ReturnCode) {
 		parseError = rcUsage
 	}
 
-	// update the loggers' verbosity settings.
-	isVerboseLog = options.Verbose.bool
-	isTraceLog = options.Trace.bool
-	isCLIMode = options.CLIMode.bool
+	// try parsing the user's duration options, storing the properly-typed value
+	// in the corresponding Option object's time.Duration field
+	if nil == parseError {
+		ival, err := time.ParseDuration(options.UIUpdateInterval.string)
+		if nil == err {
+			options.UIUpdateInterval.Duration = ival
+		} else {
+			panic(err)
+		}
+	}
 
 	return options, parseError
 }
@@ -431,7 +564,7 @@ func populateLibrary(options *Options, library []*Library) {
 		// 1. spool up the discovery channel polling, handling the content as
 		//   it is received -- the media is considered valid if it has reached
 		//   the channel.
-		go watchLibrary(lib)
+		go watchLibrary(lib, options.UIUpdateInterval.Duration)
 
 		// 2. pull all of the media already known to exist in the library from
 		//  the local database, verify it still exists, then notify the channel.
@@ -506,7 +639,8 @@ func populateLibrary(options *Options, library []*Library) {
 // handles new media as they are discovered. the media has been validated before
 // it is written to the channel, so you can safely assume the media here exists
 // and is desirable.
-func watchLibrary(lib *Library) {
+func watchLibrary(lib *Library, ival time.Duration) {
+	infoLog.tracef("polling discovery buffer every %s", ival)
 	// continuously monitors a library's signal channels for new content, which
 	// creates or processes the content accordingly.
 	for {
@@ -514,9 +648,16 @@ func watchLibrary(lib *Library) {
 		//       has already finished with whatever it was doing, so the data
 		//       should be fully initialized and ready to be handled.
 		select {
-		case /* v := */ <-lib.newMedia:
-		case /* v := */ <-lib.newSupport:
-		default:
+		case <-time.After(ival):
+		DRAIN:
+			for {
+				select {
+				case /* v := */ <-lib.newMedia:
+				case /* v := */ <-lib.newSupport:
+				default:
+					break DRAIN
+				}
+			}
 		}
 	}
 }

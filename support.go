@@ -136,7 +136,7 @@ func (s *Subtitles) addVideoMedia(col *db.Col, id int, update bool, vid *VideoMe
 	if update {
 		if err := col.Update(id, *rec); nil != err {
 			return false, rcDatabaseError.specf(
-				"addVideoMedia(%s, %d, %s): failed to update record: %s", col, id, *vid, err)
+				"addVideoMedia(%v, %d, %s): failed to update record: %s", col, id, *vid, err)
 		}
 	}
 
@@ -283,21 +283,21 @@ func (s *Subtitles) fromID(col *db.Col, id int) *ReturnCode {
 	read, readErr := col.Read(id)
 	if nil != readErr {
 		return rcDatabaseError.specf(
-			"fromID(%s): db.Read(%d): cannot read record from database: %s",
+			"fromID(%v): db.Read(%d): cannot read record from database: %s",
 			col, id, readErr)
 	}
 
 	data, marshalErr := json.Marshal(read)
 	if nil != marshalErr {
 		return rcInvalidJSONData.specf(
-			"fromID(%s): json.Marshal(%s): cannot marshal query result into JSON object: %s",
+			"fromID(%v): json.Marshal(%s): cannot marshal query result into JSON object: %s",
 			col, read, marshalErr)
 	}
 
 	unmarshalErr := json.Unmarshal(data, s)
 	if nil != unmarshalErr {
 		return rcInvalidJSONData.specf(
-			"fromID(%s): json.Unmarshal(%s): cannot unmarshal JSON object into Subtitles struct: %s",
+			"fromID(%v): json.Unmarshal(%s): cannot unmarshal JSON object into Subtitles struct: %s",
 			col, data, unmarshalErr)
 	}
 
