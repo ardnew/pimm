@@ -13,7 +13,8 @@ importpath = ardnew.com/$(project)
 gopathsrc  = $(GOPATH)/src
 gopathbin  = $(GOPATH)/bin
 
-runverbose = -trace
+dbgarg-verbose = -trace
+dbgarg-climode = -cli
 
 # -- define version info with version control ----------------------------------
 
@@ -78,24 +79,36 @@ install:
 
 # -- test / evaluation targets -------------------------------------------------
 
-.PHONY: debug-single-lib debug-dual-lib
+.PHONY: debug-tui-single-lib debug-tui-dual-lib debug-cli-single-lib debug-cli-dual-lib
 
-debug-single-lib: install
-	dlv exec $(project) -- $(runverbose) /mnt/SG4TB-NIX
+debug-tui-single-lib: install
+	dlv exec $(project) -- $(dbgarg-verbose) /mnt/SG4TB-NIX
 
-debug-dual-lib: install
-	dlv exec $(project) -- $(runverbose) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+debug-tui-dual-lib: install
+	dlv exec $(project) -- $(dbgarg-verbose) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+
+debug-cli-single-lib: install
+	dlv exec $(project) -- $(dbgarg-verbose) $(dbgarg-climode) /mnt/SG4TB-NIX
+
+debug-cli-dual-lib: install
+	dlv exec $(project) -- $(dbgarg-verbose) $(dbgarg-climode) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
 
 # -- profiling targets ---------------------------------------------------------
 
-.PHONY: profile-single-lib profile-dual-lib
+# .PHONY: profile-single-lib-cpu profile-dual-lib-cpu profile-single-lib-mem profile-dual-lib-mem
 
-profile-single-lib: scrub build
-	go test -args -verbose /mnt/SG4TB-NIX
+# profile-single-lib-cpu: clean build
+# 	go test -args -verbose /mnt/SG4TB-NIX
+# 	go tool pprof --pdf ./$(project) ./cpu.pprof > cpu-prof.pdf
 
-	go tool pprof --pdf $(project) ./cpu.pprof > cpu-prof.pdf
+# profile-dual-lib-cpu: clean build
+# 	go test -args -verbose /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+# 	go tool pprof --pdf ./$(project) ./cpu.pprof > cpu-prof.pdf
 
-profile-dual-lib: scrub build
-	go test -args -verbose /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+# profile-single-lib-mem: clean build
+# 	go test -args -verbose /mnt/SG4TB-NIX
+# 	go tool pprof --pdf ./$(project) ./cpu.pprof > cpu-prof.pdf
 
-	go tool pprof --pdf $(project) ./cpu.pprof > cpu-prof.pdf
+# profile-dual-lib-mem: clean build
+# 	go test -args -verbose /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+# 	go tool pprof --pdf ./$(project) ./cpu.pprof > cpu-prof.pdf

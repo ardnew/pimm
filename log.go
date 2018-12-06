@@ -163,13 +163,7 @@ func (l *ConsoleLog) output(d, s string) {
 			}
 			s = fmt.Sprintf("%s%s", d, s)
 		}
-		if nil != uiApp && !isCLIMode {
-			// queue the print into tview's draw cycle
-			uiApp.QueueUpdateDraw(func() { l.Print(s) })
-		} else {
-			// print directly to the console log
-			l.Print(s)
-		}
+		l.Print(s)
 	}
 }
 

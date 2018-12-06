@@ -39,13 +39,13 @@ type Library struct {
 	newMedia   chan *Discovery // media discovery
 	newSupport chan *Discovery // support file discovery
 
-	loadComplete chan bool      // synchronization lock
-	loadStart    chan time.Time // counting semaphore to limit number of concurrent loaders
-	loadElapsed  time.Duration  // measures time elapsed for load to complete (use internally, not thread-safe!)
+	loadComplete chan interface{} // synchronization lock
+	loadStart    chan time.Time   // counting semaphore to limit number of concurrent loaders
+	loadElapsed  time.Duration    // measures time elapsed for load to complete (use internally, not thread-safe!)
 
-	scanComplete chan bool      // synchronization lock
-	scanStart    chan time.Time // counting semaphore to limit number of concurrent scanners
-	scanElapsed  time.Duration  // measures time elapsed for scan to complete (use internally, not thread-safe!)
+	scanComplete chan interface{} // synchronization lock
+	scanStart    chan time.Time   // counting semaphore to limit number of concurrent scanners
+	scanElapsed  time.Duration    // measures time elapsed for scan to complete (use internally, not thread-safe!)
 }
 
 // type PathHandlerFunc represents a function that accepts a Library, file path,
@@ -178,11 +178,11 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		newMedia:   make(chan *Discovery, opt.DiscoveryBufferSize.int),
 		newSupport: make(chan *Discovery, opt.DiscoveryBufferSize.int),
 
-		loadComplete: make(chan bool),
+		loadComplete: make(chan interface{}),
 		loadStart:    make(chan time.Time, maxLibraryScanners),
 		loadElapsed:  0,
 
-		scanComplete: make(chan bool),
+		scanComplete: make(chan interface{}),
 		scanStart:    make(chan time.Time, maxLibraryScanners),
 		scanElapsed:  0,
 	}, nil
@@ -325,7 +325,7 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 		}
 		l.loadElapsed = time.Since(<-l.loadStart)
 
-		total, summary := l.db.totalRecordsString(dmLoad, -1 /*int(ecMedia)*/, -1)
+		total, summary := l.db.totalRecordsString(dmLoad, -1, -1)
 		if total > 0 {
 			infoLog.verbosef(
 				"finished loading: %q (%s loaded in %s)",
@@ -574,7 +574,7 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 		}
 		l.scanElapsed = time.Since(<-l.scanStart)
 
-		total, summary := l.db.totalRecordsString(dmScan, -1 /*int(ecMedia)*/, -1)
+		total, summary := l.db.totalRecordsString(dmScan, -1, -1)
 		if total > 0 {
 			infoLog.verbosef(
 				"finished scanning: %q (%s found in %s)",

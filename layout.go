@@ -18,14 +18,10 @@ import (
 	"github.com/rivo/tview"
 )
 
-var (
-	uiApp *tview.Application = nil
-)
-
 // type Layout holds the high level components of the terminal user interface
 // as well as the main tview runtime API object tview.Application.
 type Layout struct {
-	app  *tview.Application
+	ui   *tview.Application
 	grid *tview.Grid
 	log  *UILog
 }
@@ -34,9 +30,9 @@ type Layout struct {
 // populates it with the primary widgets.
 func newLayout() *Layout {
 
-	uiApp = tview.NewApplication()
+	ui := tview.NewApplication()
 
-	log := newUILog(uiApp)
+	log := newUILog(ui)
 	header := tview.NewBox()
 
 	menu := tview.NewBox()
@@ -60,17 +56,17 @@ func newLayout() *Layout {
 		AddItem(main, 1, 1, 1, 1, 0, 100, false).
 		AddItem(sideBar, 1, 2, 1, 1, 0, 100, false)
 
-	uiApp.SetRoot(grid, true)
-	uiApp.SetFocus(log)
+	ui.SetRoot(grid, true)
+	ui.SetFocus(log)
 
-	return &Layout{app: uiApp, grid: grid, log: log}
+	return &Layout{ui: ui, grid: grid, log: log}
 }
 
 // function show() starts drawing the user interface.
 func (l *Layout) show() *ReturnCode {
 
-	if err := l.app.Run(); err != nil {
-		return rcTUIError.specf("show(): app.Run(): %s", err)
+	if err := l.ui.Run(); err != nil {
+		return rcTUIError.specf("show(): ui.Run(): %s", err)
 	}
 	return nil
 }
@@ -95,9 +91,9 @@ type UILog struct {
 
 // function newUILog() allocates and initializes all default data for a runtime
 // log view.
-func newUILog(app *tview.Application) *UILog {
+func newUILog(ui *tview.Application) *UILog {
 
-	tvChanged := func() { app.Draw() }
+	tvChanged := func() { ui.Draw() }
 	tvDone := func(key tcell.Key) {}
 
 	tv := tview.NewTextView().

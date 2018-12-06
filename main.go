@@ -156,7 +156,7 @@ func greeting() string {
 		t = ev.desc
 	}
 
-	return fmt.Sprintf("have %s %s!", s, t)
+	return fmt.Sprintf("quitting, have %s %s!", s, t)
 }
 
 // function main() is the program entry point, obviously.
@@ -234,24 +234,17 @@ func main() {
 	//       provided via command line as those should always take precedence!
 	infoLog.tracef("(TBD) -- loading configuration: %q", config)
 
-	// initialize the UI if we aren't running in CLI-only mode. associate the
-	// loggers with the navigable log viewer.
-	if !isCLIMode {
-		layout = newLayout()
-		setWriterAll(layout.log.TextView)
-	}
-
 	// create the directory hierarchy that will store our libraries' backing
 	// data stores permanently on disk.
 	libData := options.LibData.string
 	if exists, _ := goutil.PathExists(libData); !exists {
 		if err := os.MkdirAll(libData, os.ModePerm); nil != err {
 			panic(rcInvalidConfig.specf(
-				"cannot create library data directory: %q: %s", libData, err))
+				"cannot create shared data directory: %q: %s", libData, err))
 		}
-		infoLog.tracef("created panbiblio data directory: %q", libData)
+		infoLog.tracef("created shared data directory: %q", libData)
 	} else {
-		infoLog.tracef("(TBD) -- loading data from library data directory: %q", libData)
+		infoLog.tracef("(TBD) -- loading shared data directory: %q", libData)
 	}
 
 	// runtime environment defined, begin preparing the libs and databases.
@@ -270,11 +263,13 @@ func main() {
 
 	go func(lib []*Library, start time.Time) {
 
+		var numFound uint = 0
 		for _, l := range lib {
-			<-l.scanComplete
+			numFound += (<-l.scanComplete).(uint)
 		}
 		scanElapsed := time.Since(start)
-		infoLog.logf("initialization complete (%s)", scanElapsed.Round(time.Millisecond))
+		infoLog.logf("initialization complete (%d ~things~ found in %s)",
+			numFound, scanElapsed.Round(time.Millisecond))
 		initComplete <- true
 
 	}(library, scanStart)
@@ -283,6 +278,22 @@ func main() {
 	// progress indicators and anything else the user can get away with while
 	// the scanners/loaders work.
 	if !isCLIMode {
+		layout = newLayout()
+		// associate the loggers with the navigable log viewer.
+		layout.log.TextView.ScrollToEnd()
+		setWriterAll(layout.log.TextView)
+		select {
+		case <-initComplete:
+			// if there exists something in this channel, then we have already
+			// printed "initialization complete ..." above. in which case, just
+			// carry on and display the UI with no other status to the user.
+			// we will hit this case block which is a NOOP.
+		default:
+			// otherwise, nothing exists in that channel and we are still
+			// scanning. don't sit around like a deadbeat -- tell the user we're
+			// working on it.
+			infoLog.logf("still initializing library databases ...")
+		}
 		if errCode := layout.show(); nil != errCode {
 			panic(errCode)
 		}
@@ -304,6 +315,8 @@ func main() {
 		f.Close()
 	}
 
+	// exit cleanly but explicitly so that we have some control on exit codes
+	// and resource cleanup.
 	panic(rcOK.spec(greeting()))
 }
 
@@ -333,8 +346,10 @@ func (o *Options) providedDBConfig() (bool, []string) {
 func initOptions() (options *Options, err *ReturnCode) {
 
 	defer func() {
+		// without options parsed, we cannot know where to print any status or
+		// other info, so we always print everything to the console until they
+		// are. this flag controls that state change.
 		areOptionsParsed = true
-
 		// panic handler
 		if recovered := recover(); nil != recovered {
 			options = nil
@@ -549,8 +564,6 @@ func initLibrary(options *Options) []*Library {
 // media discovered (see function watchLibrary() for handlers).
 func populateLibrary(options *Options, library []*Library) {
 
-	numMedia := map[*Library]uint{}
-
 	// for each library, dispatch a few (3) goroutines in the following order:
 	//   1. begin listening for content on the new-media and new-directory
 	//       discovery channels, and decide what to do with them;
@@ -569,6 +582,7 @@ func populateLibrary(options *Options, library []*Library) {
 		// 2. pull all of the media already known to exist in the library from
 		//  the local database, verify it still exists, then notify the channel.
 		go func(l *Library) {
+			var numLoaded uint = 0
 			if !l.db.isFirstAppearance() {
 				count, loadErr := l.load(
 					&PathHandler{
@@ -592,15 +606,15 @@ func populateLibrary(options *Options, library []*Library) {
 				if nil != loadErr {
 					errLog.verbose(loadErr)
 				}
-				numMedia[l] = count
+				numLoaded = count
 			}
-			l.loadComplete <- true
+			l.loadComplete <- numLoaded
 		}(lib)
 
 		// 3. recursively walks a library's file system, notifying the library's
 		// signal channels whenever any sort of content is found.
 		go func(l *Library) {
-			<-l.loadComplete
+			var numLoaded uint = (<-l.loadComplete).(uint)
 			count, scanErr := l.scan(
 				&PathHandler{
 					// the scanner identified some file in a subdirectory of the
@@ -622,15 +636,15 @@ func populateLibrary(options *Options, library []*Library) {
 			if nil != scanErr {
 				errLog.verbose(scanErr)
 			}
-			if numMedia[l] += count; 0 == numMedia[l] {
+			numMedia := numLoaded + count
+			if 0 == numMedia {
 				warnLog.logf("no media in %q: library is empty!", l.name)
 				if !isVerboseLog && !isTraceLog {
 					warnLog.logf("try using program options -%s or -%s for more info",
 						options.Verbose.name, options.Trace.name)
 				}
 			}
-			l.scanComplete <- true
-
+			l.scanComplete <- numMedia
 		}(lib)
 	}
 }
