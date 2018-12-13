@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,6 +54,68 @@ var (
 var (
 	areOptionsParsed bool = false
 )
+
+// type BusyState keeps track of the number of goroutines that are wishing to
+// indicate to the UI that they are active or busy, that the user should hold
+// their horses.
+type BusyState struct {
+	busyCount uint64 // number of busy goroutines
+	busyCycle uint64 // number of UI updates performed while busy
+}
+
+// function newBusyState() instantiates a new BusyState object with zeroized
+// counter and update cycle.
+func newBusyState() *BusyState {
+	return &BusyState{
+		busyCount: 0,
+		busyCycle: 0,
+	}
+}
+
+// function count() safely returns the current number of goroutines currently
+// declaring themselves as busy.
+func (s *BusyState) count() int {
+	count := atomic.LoadUint64(&s.busyCount)
+	return int(count)
+}
+
+// function inc() safely increments the number of goroutines currently declaring
+// themselves as busy by 1.
+func (s *BusyState) inc() int {
+	count := atomic.LoadUint64(&s.busyCount)
+	if 0 == count {
+		// reset the cycle if we were not busy before this increment
+		s.reset()
+	}
+	count = atomic.AddUint64(&s.busyCount, 1)
+	return int(count)
+}
+
+// function dec() safely decrements the number of goroutines currently declaring
+// themselves as busy by 1.
+func (s *BusyState) dec() int {
+	count := atomic.AddUint64(&s.busyCount, ^uint64(0))
+	return int(count)
+}
+
+// function count() safely returns the current number of goroutines currently
+// declaring themselves as busy.
+func (s *BusyState) cycle() int {
+	cycle := atomic.LoadUint64(&s.busyCycle)
+	return int(cycle)
+}
+
+// function next() safely increments by 1 the UI cycles elapsed since the
+// current busy state was initiated.
+func (s *BusyState) next() int {
+	cycle := atomic.AddUint64(&s.busyCycle, 1)
+	return int(cycle)
+}
+
+// function reset() safely resets the current UI cycles elapsed to 0.
+func (s *BusyState) reset() {
+	atomic.StoreUint64(&s.busyCycle, 0)
+}
 
 // type Option struct can contain any possible individual option configuration
 // including its command line flag identifier and usage info..
@@ -252,7 +315,7 @@ func main() {
 
 	// remaining arguments are considered paths to libraries; verify the paths
 	// before assuming valid ones exist for traversal.
-	library := initLibrary(options)
+	library := initLibrary(options, newBusyState())
 	if 0 == len(library) {
 		panic(rcInvalidConfig.spec("no valid libraries provided"))
 	}
@@ -278,7 +341,7 @@ func main() {
 	// progress indicators and anything else the user can get away with while
 	// the scanners/loaders work.
 	if !isCLIMode {
-		layout = newLayout()
+		layout = newLayout(library...)
 		// associate the loggers with the navigable log viewer.
 		layout.log.TextView.ScrollToEnd()
 		setWriterAll(layout.log.TextView)
@@ -528,7 +591,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 
 // function initLibrary() validates all library paths provided, returning a list
 // of the valid ones.
-func initLibrary(options *Options) []*Library {
+func initLibrary(options *Options, busyState *BusyState) []*Library {
 
 	var library []*Library
 
@@ -539,7 +602,7 @@ func initLibrary(options *Options) []*Library {
 	// dispatch a single goroutine per library to verify each concurrently.
 	for _, libPath := range libArgs {
 		lib, err := newLibrary(
-			options, libPath, depthUnlimited, library)
+			options, busyState, libPath, depthUnlimited, library)
 
 		// if we encounter an error, issue a warning, do NOT add it to the list
 		// of valid libraries, and continue. if it is truly a fatal error, then
@@ -579,12 +642,15 @@ func populateLibrary(options *Options, library []*Library) {
 		//   the channel.
 		go watchLibrary(lib, options.UIUpdateInterval.Duration)
 
-		// 2. pull all of the media already known to exist in the library from
-		//  the local database, verify it still exists, then notify the channel.
 		go func(l *Library) {
-			var numLoaded uint = 0
+
+			var numMedia uint = 0
+
+			// 2. pull all of the media already known to exist in the library
+			// from the local database, verify it still exists, then notify the
+			// channel.
 			if !l.db.isFirstAppearance() {
-				count, loadErr := l.load(
+				loadCount, loadErr := l.load(
 					&PathHandler{
 						// the loader identified some file in a subdirectory of
 						// the library's file system as a media file.
@@ -603,19 +669,16 @@ func populateLibrary(options *Options, library []*Library) {
 						handleOther: func(l *Library, p string, v ...interface{}) {
 						},
 					})
+				numMedia += loadCount
+
 				if nil != loadErr {
 					errLog.verbose(loadErr)
 				}
-				numLoaded = count
 			}
-			l.loadComplete <- numLoaded
-		}(lib)
 
-		// 3. recursively walks a library's file system, notifying the library's
-		// signal channels whenever any sort of content is found.
-		go func(l *Library) {
-			var numLoaded uint = (<-l.loadComplete).(uint)
-			count, scanErr := l.scan(
+			// 3. recursively walks a library's file system, notifying the
+			// library's signal channels whenever any sort of content is found.
+			scanCount, scanErr := l.scan(
 				&PathHandler{
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as a media file.
@@ -633,10 +696,11 @@ func populateLibrary(options *Options, library []*Library) {
 					handleOther: func(l *Library, p string, v ...interface{}) {
 					},
 				})
+			numMedia += scanCount
+
 			if nil != scanErr {
 				errLog.verbose(scanErr)
 			}
-			numMedia := numLoaded + count
 			if 0 == numMedia {
 				warnLog.logf("no media in %q: library is empty!", l.name)
 				if !isVerboseLog && !isTraceLog {
@@ -645,7 +709,9 @@ func populateLibrary(options *Options, library []*Library) {
 				}
 			}
 			l.scanComplete <- numMedia
+
 		}(lib)
+
 	}
 }
 

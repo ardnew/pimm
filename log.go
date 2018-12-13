@@ -31,7 +31,7 @@ type ConsoleLog struct {
 	console io.Writer
 	writer  io.Writer
 	*log.Logger
-	sync.Mutex
+	*sync.Mutex
 }
 
 // unexported constants
@@ -55,6 +55,9 @@ const (
 
 // Madmen toil surreptitiously in rituals to beckon the moon. Uncover their secrets.
 var MoonPhase = [...]rune{'🌑', '🌒', '🌓', '🌔', '🌕', '🌖', '🌗', '🌘'}
+
+var WaitCycle = MoonPhase
+var WaitCycleLength int = len(WaitCycle)
 
 // var consoleLogPrefix defines the substring prefixes included in log messages
 // to help visually grep for anything you might find significant.
@@ -113,7 +116,7 @@ func newConsoleLog(prefix string, writer io.Writer, logger *log.Logger) *Console
 		console: writer, // retain this as a fallback, don't ever overwrite.
 		writer:  writer,
 		Logger:  logger,
-		Mutex:   *new(sync.Mutex),
+		Mutex:   new(sync.Mutex),
 	}
 }
 

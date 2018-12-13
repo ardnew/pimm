@@ -36,6 +36,9 @@ type Library struct {
 	dataDir string    // directory containing all known library databases
 	db      *Database // database containing all known media in this library
 
+	busyState *BusyState // the global busy state
+	layout    *Layout    // the primary tview interface
+
 	newMedia   chan *Discovery // media discovery
 	newSupport chan *Discovery // support file discovery
 
@@ -116,7 +119,7 @@ func init() {}
 // function newLibrary() creates and initializes a new Library ready to scan.
 // the library database is also created if one doesn't already exist, otherwise
 // it is opened for businesss.
-func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, *ReturnCode) {
+func newLibrary(opt *Options, busy *BusyState, lib string, lim uint, curr []*Library) (*Library, *ReturnCode) {
 
 	// pull only the relevant info we need from the Options struct.
 	dat := opt.LibData.string
@@ -173,6 +176,9 @@ func newLibrary(opt *Options, lib string, lim uint, curr []*Library) (*Library, 
 		// path to the library database directory.
 		dataDir: dat,
 		db:      db,
+
+		busyState: busy,
+		layout:    nil,
 
 		// channels for communicating scanner data to the main thread.
 		newMedia:   make(chan *Discovery, opt.DiscoveryBufferSize.int),
@@ -309,6 +315,7 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 	// isn't already filled to capacity.
 	select {
 	case l.loadStart <- time.Now():
+		l.busyState.inc()
 		// the write succeeded, so we can initiate loading. keep track of the
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
@@ -324,6 +331,7 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 			}
 		}
 		l.loadElapsed = time.Since(<-l.loadStart)
+		l.busyState.dec()
 
 		total, summary := l.db.totalRecordsString(dmLoad, -1, -1)
 		if total > 0 {
@@ -336,7 +344,6 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 				l.name, l.loadElapsed.Round(time.Millisecond))
 		}
 		numLoad = total
-
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
@@ -564,6 +571,7 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 	// isn't already filled to capacity.
 	select {
 	case l.scanStart <- time.Now():
+		l.busyState.inc()
 		// the write succeeded, so we can initiate scanning. keep track of the
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
@@ -573,6 +581,7 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 			l.recandidateSubtitles(false)
 		}
 		l.scanElapsed = time.Since(<-l.scanStart)
+		l.busyState.dec()
 
 		total, summary := l.db.totalRecordsString(dmScan, -1, -1)
 		if total > 0 {
@@ -585,7 +594,6 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 				l.name, l.scanElapsed.Round(time.Millisecond))
 		}
 		numScan = total
-
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
