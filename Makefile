@@ -13,7 +13,7 @@ importpath = ardnew.com/$(project)
 gopathsrc  = $(GOPATH)/src
 gopathbin  = $(GOPATH)/bin
 
-dbgarg-verbose = -trace
+dbgarg-verbosity = -verbose
 dbgarg-climode = -cli
 
 # -- define version info with version control ----------------------------------
@@ -79,19 +79,32 @@ install:
 
 # -- test / evaluation targets -------------------------------------------------
 
+.PHONY: tui-single-lib tui-dual-lib cli-single-lib cli-dual-lib
 .PHONY: debug-tui-single-lib debug-tui-dual-lib debug-cli-single-lib debug-cli-dual-lib
 
+tui-single-lib: install
+	$(project) $(dbgarg-verbosity) /mnt/SG4TB-NIX
+
+tui-dual-lib: install
+	$(project) $(dbgarg-verbosity) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+
+cli-single-lib: install
+	$(project) $(dbgarg-verbosity) $(dbgarg-climode) /mnt/SG4TB-NIX
+
+cli-dual-lib: install
+	$(project) $(dbgarg-verbosity) $(dbgarg-climode) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+
 debug-tui-single-lib: install
-	dlv exec $(project) -- $(dbgarg-verbose) /mnt/SG4TB-NIX
+	dlv exec $(project) -- $(dbgarg-verbosity) /mnt/SG4TB-NIX
 
 debug-tui-dual-lib: install
-	dlv exec $(project) -- $(dbgarg-verbose) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+	dlv exec $(project) -- $(dbgarg-verbosity) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
 
 debug-cli-single-lib: install
-	dlv exec $(project) -- $(dbgarg-verbose) $(dbgarg-climode) /mnt/SG4TB-NIX
+	dlv exec $(project) -- $(dbgarg-verbosity) $(dbgarg-climode) /mnt/SG4TB-NIX
 
 debug-cli-dual-lib: install
-	dlv exec $(project) -- $(dbgarg-verbose) $(dbgarg-climode) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
+	dlv exec $(project) -- $(dbgarg-verbosity) $(dbgarg-climode) /mnt/SG4TB-NIX/movies /mnt/SG4TB-NIX/tv
 
 # -- profiling targets ---------------------------------------------------------
 

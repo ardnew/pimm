@@ -33,7 +33,7 @@ const (
 	defaultMEMProfileName      = "mem.prof"
 	defaultConfigPath          = "config"
 	defaultLibDataPath         = "library.db"
-	defaultUIUpdateInterval    = "500ms"
+	defaultDiscoveryInterval   = "500ms"
 	defaultDiscoveryBufferSize = 4096
 )
 
@@ -54,68 +54,6 @@ var (
 var (
 	areOptionsParsed bool = false
 )
-
-// type BusyState keeps track of the number of goroutines that are wishing to
-// indicate to the UI that they are active or busy, that the user should hold
-// their horses.
-type BusyState struct {
-	busyCount uint64 // number of busy goroutines
-	busyCycle uint64 // number of UI updates performed while busy
-}
-
-// function newBusyState() instantiates a new BusyState object with zeroized
-// counter and update cycle.
-func newBusyState() *BusyState {
-	return &BusyState{
-		busyCount: 0,
-		busyCycle: 0,
-	}
-}
-
-// function count() safely returns the current number of goroutines currently
-// declaring themselves as busy.
-func (s *BusyState) count() int {
-	count := atomic.LoadUint64(&s.busyCount)
-	return int(count)
-}
-
-// function inc() safely increments the number of goroutines currently declaring
-// themselves as busy by 1.
-func (s *BusyState) inc() int {
-	count := atomic.LoadUint64(&s.busyCount)
-	if 0 == count {
-		// reset the cycle if we were not busy before this increment
-		s.reset()
-	}
-	count = atomic.AddUint64(&s.busyCount, 1)
-	return int(count)
-}
-
-// function dec() safely decrements the number of goroutines currently declaring
-// themselves as busy by 1.
-func (s *BusyState) dec() int {
-	count := atomic.AddUint64(&s.busyCount, ^uint64(0))
-	return int(count)
-}
-
-// function count() safely returns the current number of goroutines currently
-// declaring themselves as busy.
-func (s *BusyState) cycle() int {
-	cycle := atomic.LoadUint64(&s.busyCycle)
-	return int(cycle)
-}
-
-// function next() safely increments by 1 the UI cycles elapsed since the
-// current busy state was initiated.
-func (s *BusyState) next() int {
-	cycle := atomic.AddUint64(&s.busyCycle, 1)
-	return int(cycle)
-}
-
-// function reset() safely resets the current UI cycles elapsed to 0.
-func (s *BusyState) reset() {
-	atomic.StoreUint64(&s.busyCycle, 0)
-}
 
 // type Option struct can contain any possible individual option configuration
 // including its command line flag identifier and usage info..
@@ -169,8 +107,73 @@ type Options struct {
 	DiskBufferSize *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
 	HashBufferSize *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
 
-	UIUpdateInterval    *Option // the interval in which the UI checks for new files in the discovery buffer
+	DiscoveryInterval   *Option // the interval in which the checks for new files in the discovery buffer occur
 	DiscoveryBufferSize *Option // size (file count) of discovery channel buffers
+}
+
+// type BusyState keeps track of the number of goroutines that are wishing to
+// indicate to the UI that they are active or busy, that the user should hold
+// their horses.
+type BusyState struct {
+	changed   chan uint64 // signal when busy state changes
+	busyCount uint64      // number of busy goroutines
+	busyCycle uint64      // number of UI updates performed while busy
+}
+
+// function newBusyState() instantiates a new BusyState object with zeroized
+// counter and update cycle.
+func newBusyState() *BusyState {
+	return &BusyState{
+		changed:   make(chan uint64),
+		busyCount: 0,
+		busyCycle: 0,
+	}
+}
+
+// function count() safely returns the current number of goroutines currently
+// declaring themselves as busy.
+func (s *BusyState) count() int {
+	count := atomic.LoadUint64(&s.busyCount)
+	return int(count)
+}
+
+// function inc() safely increments the number of goroutines currently declaring
+// themselves as busy by 1.
+func (s *BusyState) inc() int {
+	newCount := atomic.AddUint64(&s.busyCount, 1)
+	s.changed <- newCount
+	// reset the cycle if we were not busy before this increment
+	s.reset()
+	return int(newCount)
+}
+
+// function dec() safely decrements the number of goroutines currently declaring
+// themselves as busy by 1.
+func (s *BusyState) dec() int {
+	newCount := atomic.AddUint64(&s.busyCount, ^uint64(0))
+	s.changed <- newCount
+	// reset the cycle if we were not busy before this increment
+	s.reset()
+	return int(newCount)
+}
+
+// function count() safely returns the current number of goroutines currently
+// declaring themselves as busy.
+func (s *BusyState) cycle() int {
+	cycle := atomic.LoadUint64(&s.busyCycle)
+	return int(cycle)
+}
+
+// function next() safely increments by 1 the UI cycles elapsed since the
+// current busy state was initiated.
+func (s *BusyState) next() int {
+	cycle := atomic.AddUint64(&s.busyCycle, 1)
+	return int(cycle)
+}
+
+// function reset() safely resets the current UI cycles elapsed to 0.
+func (s *BusyState) reset() {
+	atomic.StoreUint64(&s.busyCycle, 0)
 }
 
 // function configDir() constructs the full path to the directory containing all
@@ -245,6 +248,7 @@ func main() {
 		}
 	}()
 
+	var busyState *BusyState = newBusyState()
 	var layout *Layout = nil
 	var initComplete chan bool = make(chan bool)
 
@@ -315,7 +319,7 @@ func main() {
 
 	// remaining arguments are considered paths to libraries; verify the paths
 	// before assuming valid ones exist for traversal.
-	library := initLibrary(options, newBusyState())
+	library := initLibrary(options, busyState)
 	if 0 == len(library) {
 		panic(rcInvalidConfig.spec("no valid libraries provided"))
 	}
@@ -341,7 +345,7 @@ func main() {
 	// progress indicators and anything else the user can get away with while
 	// the scanners/loaders work.
 	if !isCLIMode {
-		layout = newLayout(library...)
+		layout = newLayout(options, busyState, library...)
 		// associate the loggers with the navigable log viewer.
 		layout.log.TextView.ScrollToEnd()
 		setWriterAll(layout.log.TextView)
@@ -500,14 +504,14 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage: "size (in bytes) by which each hash table will grow to make room once it reaches capacity\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
 			int:   defaultHashBufferSize,
 		},
-		UIUpdateInterval: &Option{
-			name:   "uiupdateinterval",
-			usage:  "the interval (in human-readable form, e.g. the following are all valid and equivalent: \"1500ms\" = \"1.5s\" = \"1s500ms\") in which new files in the discovery buffers are retrieved and notified to the user or added to the UI. this option is closely related to option -discoverybuffersize and may adversely affect performance since insufficient update frequency will result in the discovery buffers filling to capacity and thus block the media scanners from continuing (until this update operation frees up space in the buffer).",
-			string: defaultUIUpdateInterval, //"ns", "us" (or "µs"), "ms", "s", "m", "h"
+		DiscoveryInterval: &Option{
+			name:   "discoveryinterval",
+			usage:  "the interval in which new files in the discovery buffers are retrieved and notified to the user or added to the UI. this option is closely related to option -discoverybuffersize and may adversely affect performance since insufficient update frequency will result in the discovery buffers filling to capacity and thus block the media scanners from continuing until the update operation empties the discovery buffer. values are specified in human-readable form (e.g., the following arguments are all valid and equivalent: \"1500ms\" = \"1.5s\" = \"1s500ms\") ",
+			string: defaultDiscoveryInterval, //"ns", "us" (or "µs"), "ms", "s", "m", "h"
 		},
 		DiscoveryBufferSize: &Option{
 			name:  "discoverybuffersize",
-			usage: "the size (in number of file references) of the file discovery buffers. once this buffer reaches capacity, the media discovery operations will halt and wait for the update interval (see -uiupdateinterval) to elapse and empty the buffers before resuming.",
+			usage: "the size (in number of file references) of the file discovery buffers. once this buffer reaches capacity, the media discovery operations will halt and wait for the discovery interval (see -discoveryinterval) to elapse and empty the buffers before resuming.",
 			int:   defaultDiscoveryBufferSize,
 		},
 	}
@@ -524,7 +528,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 		"libdata":             options.LibData,
 		"diskbuffersize":      options.DiskBufferSize,
 		"hashbuffersize":      options.HashBufferSize,
-		"uiupdateinterval":    options.UIUpdateInterval,
+		"discoveryinterval":   options.DiscoveryInterval,
 		"discoverybuffersize": options.DiscoveryBufferSize,
 	}
 
@@ -541,7 +545,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
 	options.IntVar(&options.DiskBufferSize.int, options.DiskBufferSize.name, options.DiskBufferSize.int, options.DiskBufferSize.usage)
 	options.IntVar(&options.HashBufferSize.int, options.HashBufferSize.name, options.HashBufferSize.int, options.HashBufferSize.usage)
-	options.StringVar(&options.UIUpdateInterval.string, options.UIUpdateInterval.name, options.UIUpdateInterval.string, options.UIUpdateInterval.usage)
+	options.StringVar(&options.DiscoveryInterval.string, options.DiscoveryInterval.name, options.DiscoveryInterval.string, options.DiscoveryInterval.usage)
 	options.IntVar(&options.DiscoveryBufferSize.int, options.DiscoveryBufferSize.name, options.DiscoveryBufferSize.int, options.DiscoveryBufferSize.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
@@ -578,9 +582,9 @@ func initOptions() (options *Options, err *ReturnCode) {
 	// try parsing the user's duration options, storing the properly-typed value
 	// in the corresponding Option object's time.Duration field
 	if nil == parseError {
-		ival, err := time.ParseDuration(options.UIUpdateInterval.string)
+		ival, err := time.ParseDuration(options.DiscoveryInterval.string)
 		if nil == err {
-			options.UIUpdateInterval.Duration = ival
+			options.DiscoveryInterval.Duration = ival
 		} else {
 			panic(err)
 		}
@@ -637,18 +641,16 @@ func populateLibrary(options *Options, library []*Library) {
 	//       accordingly.
 	for _, lib := range library {
 
-		// 1. spool up the discovery channel polling, handling the content as
-		//   it is received -- the media is considered valid if it has reached
-		//   the channel.
-		go watchLibrary(lib, options.UIUpdateInterval.Duration)
+		// 1. spool up the discovery channel polling, handling the content as it
+		//    is received -- the media is considered valid if it has reached the
+		//    channel.
+		go watchLibrary(lib, options.DiscoveryInterval.Duration)
 
+		// 2. pull all of the media already known to exist in the library from
+		//    the local database, verify it still exists, then notify the
+		//     channel.
 		go func(l *Library) {
-
 			var numMedia uint = 0
-
-			// 2. pull all of the media already known to exist in the library
-			// from the local database, verify it still exists, then notify the
-			// channel.
 			if !l.db.isFirstAppearance() {
 				loadCount, loadErr := l.load(
 					&PathHandler{
@@ -670,14 +672,18 @@ func populateLibrary(options *Options, library []*Library) {
 						},
 					})
 				numMedia += loadCount
-
 				if nil != loadErr {
 					errLog.verbose(loadErr)
 				}
 			}
+			l.loadComplete <- numMedia
+		}(lib)
 
-			// 3. recursively walks a library's file system, notifying the
-			// library's signal channels whenever any sort of content is found.
+		// 3. recursively walks a library's file system, notifying the library's
+		//    signal channels whenever any sort of content is found.
+		go func(l *Library) {
+			// postpone the scanning until the load routine has completed.
+			var numMedia uint = (<-l.loadComplete).(uint)
 			scanCount, scanErr := l.scan(
 				&PathHandler{
 					// the scanner identified some file in a subdirectory of the
@@ -697,7 +703,6 @@ func populateLibrary(options *Options, library []*Library) {
 					},
 				})
 			numMedia += scanCount
-
 			if nil != scanErr {
 				errLog.verbose(scanErr)
 			}
@@ -709,7 +714,6 @@ func populateLibrary(options *Options, library []*Library) {
 				}
 			}
 			l.scanComplete <- numMedia
-
 		}(lib)
 
 	}

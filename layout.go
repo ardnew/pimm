@@ -24,11 +24,11 @@ import (
 // type Layout holds the high level components of the terminal user interface
 // as well as the main tview runtime API object tview.Application.
 type Layout struct {
-	ui   *tview.Application
-	grid *tview.Grid
-	log  *UILog
-
-	busy *BusyState
+	ui      *tview.Application
+	grid    *tview.Grid
+	options *Options
+	busy    *BusyState
+	log     *UILog
 
 	// NOTE: this screen var won't get set until one of the draw routines which
 	// uses it is called, so be careful when accessing it -- make sure it's
@@ -36,18 +36,53 @@ type Layout struct {
 	screen *tcell.Screen
 }
 
+var (
+	idleUpdateFreq time.Duration = 1 * time.Second
+	busyUpdateFreq time.Duration = 100 * time.Millisecond
+)
+
 // function show() starts drawing the user interface.
 func (l *Layout) show() *ReturnCode {
 
-	// timer forcing the app to redraw (@ 10Hz) any areas that may have changed.
+	// timer forcing the app to redraw any areas that may have changed. this
+	// update frequency is dynamic -- more frequent while the "Busy" indicator
+	// is active, less frequent while it isn't.
 	go func(l *Layout) {
-		tick := time.NewTicker(100 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			select {
-			case <-tick.C:
-				l.ui.QueueUpdateDraw(func() {})
+
+		// use the CPU-intensive frequency by default to err on the side of
+		// caution.
+		updateFreq := busyUpdateFreq
+
+		setFreq := func(curr, freq *time.Duration) bool {
+			if *curr != *freq {
+				*curr = *freq
+				return true
 			}
+			return false
+		}
+
+		for {
+			tick := time.NewTicker(updateFreq)
+		REFRESH:
+			for {
+				select {
+				case <-tick.C:
+					l.ui.QueueUpdateDraw(func() {})
+				case count := <-l.busy.changed:
+					l.ui.QueueUpdateDraw(func() {})
+					switch count {
+					case 0:
+						if setFreq(&updateFreq, &idleUpdateFreq) {
+							break REFRESH
+						}
+					default:
+						if setFreq(&updateFreq, &busyUpdateFreq) {
+							break REFRESH
+						}
+					}
+				}
+			}
+			tick.Stop()
 		}
 	}(l)
 
@@ -60,7 +95,7 @@ func (l *Layout) show() *ReturnCode {
 // function newLayout() creates the initial layout of the user interface and
 // populates it with the primary widgets. each Library passed in as argument
 // has its Layout field initialized with this instance.
-func newLayout(lib ...*Library) *Layout {
+func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 
 	ui := tview.NewApplication()
 
@@ -100,18 +135,18 @@ func newLayout(lib ...*Library) *Layout {
 	ui.SetFocus(log)
 
 	layout := Layout{
-		ui:     ui,
-		grid:   grid,
-		log:    log,
-		busy:   nil,
-		screen: nil,
+		ui:      ui,
+		grid:    grid,
+		options: opt,
+		busy:    busy,
+		log:     log,
+		screen:  nil,
 	}
 
 	footer.SetDrawFunc(layout.drawStatus)
 
 	for _, l := range lib {
 		l.layout = &layout
-		layout.busy = l.busyState
 	}
 
 	return &layout
