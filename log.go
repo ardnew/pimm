@@ -54,7 +54,7 @@ const (
 )
 
 // Madmen toil surreptitiously in rituals to beckon the moon. Uncover their secrets.
-var MoonPhase = []rune("🌑🌒🌓🌔🌕🌖🌗🌘")
+var MoonPhase = []rune("🌘🌗🌖🌕🌔🌓🌒🌑")
 var MoonPhaseLength = len(MoonPhase)
 
 // var consoleLogPrefix defines the substring prefixes included in log messages

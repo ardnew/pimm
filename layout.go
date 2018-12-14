@@ -183,11 +183,11 @@ func (l *Layout) drawStatus(screen tcell.Screen, x int, y int, width int, height
 		// draw the "working..." indicator. note the +2 is to make room for the
 		// moon rune following this indicator.
 		working := fmt.Sprintf("working%-*s", ellipses, bytes.Repeat([]byte{'.'}, cycle%ellipses))
-		tview.Print(screen, working, x-ellipses+2, y, width, tview.AlignRight, tcell.ColorYellow)
+		tview.Print(screen, working, x-ellipses+1, y, width, tview.AlignRight, tcell.ColorAqua)
 
 		// draw the cyclic moon rotation
-		moonIndex := cycle % MoonPhaseLength
-		tview.Print(screen, string(MoonPhase[moonIndex]), x, y, width, tview.AlignRight, tcell.ColorGreen)
+		moon := fmt.Sprintf("%c ", MoonPhase[cycle%MoonPhaseLength])
+		tview.Print(screen, moon, x, y, width, tview.AlignRight, tcell.ColorDarkOrange)
 	}
 
 	// Space for other content.
