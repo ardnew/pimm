@@ -116,6 +116,7 @@ type Options struct {
 // their horses.
 type BusyState struct {
 	changed   chan uint64 // signal when busy state changes
+	_         uintptr     // padding, 64-bit atomic ops must be performed on 8-byte boundaries (see go1.10 sync/atomic bugs)
 	busyCount uint64      // number of busy goroutines
 	busyCycle uint64      // number of UI updates performed while busy
 }
@@ -143,7 +144,9 @@ func (s *BusyState) inc() int {
 	newCount := atomic.AddUint64(&s.busyCount, 1)
 	s.changed <- newCount
 	// reset the cycle if we were not busy before this increment
-	s.reset()
+	if 1 == newCount {
+		s.reset()
+	}
 	return int(newCount)
 }
 
@@ -152,8 +155,10 @@ func (s *BusyState) inc() int {
 func (s *BusyState) dec() int {
 	newCount := atomic.AddUint64(&s.busyCount, ^uint64(0))
 	s.changed <- newCount
-	// reset the cycle if we were not busy before this increment
-	s.reset()
+	// reset the cycle if we are not busy after this increment
+	if 0 == newCount {
+		s.reset()
+	}
 	return int(newCount)
 }
 

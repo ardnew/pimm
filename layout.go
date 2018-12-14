@@ -17,6 +17,7 @@ import (
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 
+	"bytes"
 	"fmt"
 	"time"
 )
@@ -157,6 +158,12 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 // remains accurate along with any status information currently available.
 func (l *Layout) drawStatus(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
 
+	// the number of ellipsis periods (+1) to draw after the "working" indicator
+	const ellipses = 4
+
+	// update the layout's associated screen field. note that you must be very
+	// careful and not access this field until this status line has been drawn
+	// at least one time.
 	if nil == l.screen {
 		l.screen = &screen
 	}
@@ -170,9 +177,17 @@ func (l *Layout) drawStatus(screen tcell.Screen, x int, y int, width int, height
 	// update the busy indicator if we have any active worker threads
 	count := l.busy.count()
 	if count > 0 {
-		index := l.busy.next() % WaitCycleLength
-		waitRune := fmt.Sprintf(" %c ", WaitCycle[index])
-		tview.Print(screen, waitRune, x, y, width, tview.AlignLeft, tcell.ColorYellow)
+		// increment the screen refresh counter
+		cycle := l.busy.next()
+
+		// draw the "working..." indicator. note the +2 is to make room for the
+		// moon rune following this indicator.
+		working := fmt.Sprintf("working%-*s", ellipses, bytes.Repeat([]byte{'.'}, cycle%ellipses))
+		tview.Print(screen, working, x-ellipses+2, y, width, tview.AlignRight, tcell.ColorYellow)
+
+		// draw the cyclic moon rotation
+		moonIndex := cycle % MoonPhaseLength
+		tview.Print(screen, string(MoonPhase[moonIndex]), x, y, width, tview.AlignRight, tcell.ColorGreen)
 	}
 
 	// Space for other content.
