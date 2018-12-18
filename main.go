@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
-	"sync/atomic"
 	"time"
 )
 
@@ -68,20 +67,6 @@ type Option struct {
 	time.Duration
 }
 
-// type TimeInterval struct contains a start and end time (together with a
-// contains() function) as well as a description string.
-type TimeInterval struct {
-	start time.Time
-	stop  time.Time
-	desc  string
-}
-
-// function contains() verifies the given time is in the TimeInterval half-open
-// range, i.e. time is in interval [start, end).
-func (i *TimeInterval) contains(t time.Time) bool {
-	return (t.After(i.start) || t.Equal(i.start)) && t.Before(i.stop)
-}
-
 // type NamedOption is intended to map the name of an option to the actual
 // *Option struct associated with it.
 type NamedOption map[string]*Option
@@ -111,86 +96,18 @@ type Options struct {
 	DiscoveryBufferSize *Option // size (file count) of discovery channel buffers
 }
 
-// type BusyState keeps track of the number of goroutines that are wishing to
-// indicate to the UI that they are active or busy, that the user should hold
-// their horses.
-type BusyState struct {
-	changed   chan uint64 // signal when busy state changes
-	_         uintptr     // padding, 64-bit atomic ops must be performed on 8-byte boundaries (see go1.10 sync/atomic bugs)
-	busyCount uint64      // number of busy goroutines
-	busyCycle uint64      // number of UI updates performed while busy
+// type TimeInterval struct contains a start and end time (together with a
+// contains() function) as well as a description string.
+type TimeInterval struct {
+	start time.Time
+	stop  time.Time
+	desc  string
 }
 
-// function newBusyState() instantiates a new BusyState object with zeroized
-// counter and update cycle.
-func newBusyState() *BusyState {
-	return &BusyState{
-		changed:   make(chan uint64),
-		busyCount: 0,
-		busyCycle: 0,
-	}
-}
-
-// function count() safely returns the current number of goroutines currently
-// declaring themselves as busy.
-func (s *BusyState) count() int {
-	count := atomic.LoadUint64(&s.busyCount)
-	return int(count)
-}
-
-// function inc() safely increments the number of goroutines currently declaring
-// themselves as busy by 1.
-func (s *BusyState) inc() int {
-	newCount := atomic.AddUint64(&s.busyCount, 1)
-	s.changed <- newCount
-	// reset the cycle if we were not busy before this increment
-	if 1 == newCount {
-		s.reset()
-	}
-	return int(newCount)
-}
-
-// function dec() safely decrements the number of goroutines currently declaring
-// themselves as busy by 1.
-func (s *BusyState) dec() int {
-	newCount := atomic.AddUint64(&s.busyCount, ^uint64(0))
-	s.changed <- newCount
-	// reset the cycle if we are not busy after this increment
-	if 0 == newCount {
-		s.reset()
-	}
-	return int(newCount)
-}
-
-// function count() safely returns the current number of goroutines currently
-// declaring themselves as busy.
-func (s *BusyState) cycle() int {
-	cycle := atomic.LoadUint64(&s.busyCycle)
-	return int(cycle)
-}
-
-// function next() safely increments by 1 the UI cycles elapsed since the
-// current busy state was initiated.
-func (s *BusyState) next() int {
-	cycle := atomic.AddUint64(&s.busyCycle, 1)
-	return int(cycle)
-}
-
-// function reset() safely resets the current UI cycles elapsed to 0.
-func (s *BusyState) reset() {
-	atomic.StoreUint64(&s.busyCycle, 0)
-}
-
-// function configDir() constructs the full path to the directory containing all
-// of the program's supporting configuration data. if the user has defined a
-// specific config file (via -config arg), then use the _logical_ parent
-// directory of that file path; otherwise, use the default path "~/.<identity>".
-func configDir(opt *Options) string {
-	if nil == opt {
-		return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
-	} else {
-		return filepath.Dir(opt.Config.string)
-	}
+// function contains() verifies the given time is in the TimeInterval half-open
+// range, i.e. time is in interval [start, end).
+func (i *TimeInterval) contains(t time.Time) bool {
+	return (t.After(i.start) || t.Equal(i.start)) && t.Before(i.stop)
 }
 
 // function greeting() generates a random adjective (synonym of "good" or "bad")
@@ -268,10 +185,10 @@ func main() {
 		infoLog.verbosef("writing CPU profile: %q", options.CPUProfileName.string)
 		f, err := os.Create(options.CPUProfileName.string)
 		if err != nil {
-			panic(rcInvalidFile.specf("could not create CPU profile: ", err))
+			panic(rcInvalidFile.specf("could not create CPU profile: %s", err))
 		}
 		if err := pprof.StartCPUProfile(f); err != nil {
-			panic(rcInvalidFile.specf("could not start CPU profile: ", err))
+			panic(rcInvalidFile.specf("could not start CPU profile: %s", err))
 		}
 		defer pprof.StopCPUProfile()
 	}
@@ -287,7 +204,7 @@ func main() {
 
 	// create the directory hierarchy that will store our configuration data
 	// permanently on disk.
-	configDir := configDir(options)
+	configDir := options.configDir()
 	if !configExists {
 		if dirExists, _ := goutil.PathExists(configDir); !dirExists {
 			if err := os.MkdirAll(configDir, os.ModePerm); nil != err {
@@ -352,8 +269,8 @@ func main() {
 	if !isCLIMode {
 		layout = newLayout(options, busyState, library...)
 		// associate the loggers with the navigable log viewer.
-		layout.log.TextView.ScrollToEnd()
-		setWriterAll(layout.log.TextView)
+		layout.log.ScrollToEnd()
+		setWriterAll(layout.log)
 		select {
 		case <-initComplete:
 			// if there exists something in this channel, then we have already
@@ -378,11 +295,11 @@ func main() {
 		infoLog.verbosef("writing memory profile: %q", options.MEMProfileName.string)
 		f, err := os.Create(options.MEMProfileName.string)
 		if err != nil {
-			panic(rcInvalidFile.specf("could not create memory profile: ", err))
+			panic(rcInvalidFile.specf("could not create memory profile: %s", err))
 		}
 		runtime.GC() // get up-to-date statistics
 		if err := pprof.WriteHeapProfile(f); err != nil {
-			panic(rcInvalidFile.specf("could not write memory profile: ", err))
+			panic(rcInvalidFile.specf("could not write memory profile: %s", err))
 		}
 		f.Close()
 	}
@@ -390,6 +307,18 @@ func main() {
 	// exit cleanly but explicitly so that we have some control on exit codes
 	// and resource cleanup.
 	panic(rcOK.spec(greeting()))
+}
+
+// function configDir() constructs the full path to the directory containing all
+// of the program's supporting configuration data. if the user has defined a
+// specific config file (via -config arg), then use the _logical_ parent
+// directory of that file path; otherwise, use the default path "~/.<identity>".
+func (o *Options) configDir() string {
+	if nil == o {
+		return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
+	} else {
+		return filepath.Dir(o.Config.string)
+	}
 }
 
 // function providedDBConfig() checks the "Provided" hash of the Options struct
@@ -438,8 +367,8 @@ func initOptions() (options *Options, err *ReturnCode) {
 		}
 	}()
 
-	configPath := filepath.Join(configDir(nil), defaultConfigPath)
-	libDataPath := filepath.Join(configDir(nil), defaultLibDataPath)
+	configPath := filepath.Join(options.configDir(), defaultConfigPath)
+	libDataPath := filepath.Join(options.configDir(), defaultLibDataPath)
 
 	// define the option properties that the command line parser recognizes.
 	options = &Options{

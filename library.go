@@ -118,7 +118,7 @@ func init() {}
 
 // function newLibrary() creates and initializes a new Library ready to scan.
 // the library database is also created if one doesn't already exist, otherwise
-// it is opened for businesss.
+// it is opened for business.
 func newLibrary(opt *Options, busy *BusyState, lib string, lim uint, curr []*Library) (*Library, *ReturnCode) {
 
 	// pull only the relevant info we need from the Options struct.
@@ -293,7 +293,7 @@ func (l *Library) loadDive(ph *PathHandler, class EntityClass, kind int) (uint, 
 
 // function load() is the entry point for initiating a load on the library's
 // backing data store. currently, the load is dispatched and cannot be safely
-// interruped. you must wait for the load to finish before restarting.
+// interrupted. you must wait for the load to finish before restarting.
 func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 
 	var (
@@ -549,7 +549,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 
 // function scan() is the entry point for initiating a scan on the library's
 // root file system. currently, the scan is dispatched and cannot be safely
-// interruped. you must wait for the scan to finish before restarting.
+// interrupted. you must wait for the scan to finish before restarting.
 func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 
 	var (

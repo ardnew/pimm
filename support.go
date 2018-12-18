@@ -70,10 +70,10 @@ const (
 
 var (
 	supportIndex = [sxCOUNT]*EntityIndex{
-		&EntityIndex{"AbsPath"}, // = sxPath (0)
-		&EntityIndex{"AbsDir"},  // = sxDir  (1)
-		&EntityIndex{"AbsName"}, // = sxBase (2)
-		&EntityIndex{"AbsBase"}, // = sxBase (3)
+		{"AbsPath"}, // = sxPath (0)
+		{"AbsDir"},  // = sxDir  (1)
+		{"AbsName"}, // = sxBase (2)
+		{"AbsBase"}, // = sxBase (3)
 	}
 )
 

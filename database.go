@@ -49,7 +49,7 @@ var (
 	defaultNumHashBuckets = 8192
 )
 
-// type JSONDataConfig defines all of tiedot's configurable paramters for
+// type JSONDataConfig defines all of tiedot's configurable parameters for
 // initial index and cache sizes
 type JSONDataConfig struct {
 	options        *Options // not stored in the json data
@@ -147,7 +147,7 @@ func (c *JSONDataConfig) equals(jdc *JSONDataConfig) (bool, []string) {
 	return 0 == len(uneq), uneq
 }
 
-// type Database represents an abstraction from the internal persistant storage
+// type Database represents an abstraction from the internal persistent storage
 // mechanism used for maintaining an index of all known libraries and their
 // respective media content.
 type Database struct {

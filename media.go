@@ -88,10 +88,10 @@ const (
 
 var (
 	mediaIndex = [mxCOUNT]*EntityIndex{
-		&EntityIndex{"AbsPath"}, // = mxPath (0)
-		&EntityIndex{"AbsDir"},  // = mxDir  (1)
-		&EntityIndex{"AbsName"}, // = mxName (2)
-		&EntityIndex{"AbsBase"}, // = mxBase (3)
+		{"AbsPath"}, // = mxPath (0)
+		{"AbsDir"},  // = mxDir  (1)
+		{"AbsName"}, // = mxName (2)
+		{"AbsBase"}, // = mxBase (3)
 	}
 )
 
