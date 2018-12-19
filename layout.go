@@ -25,7 +25,7 @@ import (
 
 const (
 	sideColumnWidth = 32
-	logRowsHeight   = 4
+	logRowsHeight   = 5 // number of visible log lines + 1
 )
 
 var (
@@ -34,18 +34,28 @@ var (
 )
 
 var (
-	colorScheme = map[string]*tcell.Color{
-		"primitive-background-color":     &tview.Styles.PrimitiveBackgroundColor,
-		"contrast-background-color":      &tview.Styles.ContrastBackgroundColor,
-		"more-contrast-background-color": &tview.Styles.MoreContrastBackgroundColor,
-		"border-color":                   &tview.Styles.BorderColor,
-		"title-color":                    &tview.Styles.TitleColor,
-		"graphics-color":                 &tview.Styles.GraphicsColor,
-		"primary-text-color":             &tview.Styles.PrimaryTextColor,
-		"secondary-text-color":           &tview.Styles.SecondaryTextColor,
-		"tertiary-text-color":            &tview.Styles.TertiaryTextColor,
-		"inverse-text-color":             &tview.Styles.InverseTextColor,
-		"contrast-secondary-text-color":  &tview.Styles.ContrastSecondaryTextColor,
+	colorScheme = struct {
+		inactiveText     tcell.Color
+		activeText       tcell.Color
+		inactiveMenuText tcell.Color
+		activeMenuText   tcell.Color
+		inactiveBorder   tcell.Color
+		activeBorder     tcell.Color
+		clockText        tcell.Color
+		statusText       tcell.Color
+		statusIndicator  tcell.Color
+		identityText     tcell.Color
+	}{
+		inactiveText:     tcell.ColorGray,
+		activeText:       tcell.ColorLightSlateGray,
+		inactiveMenuText: tcell.ColorSkyblue,
+		activeMenuText:   tcell.ColorDodgerBlue,
+		inactiveBorder:   tcell.ColorWhite,
+		activeBorder:     tcell.ColorSkyblue,
+		clockText:        tcell.ColorDodgerBlue,
+		statusText:       tcell.ColorGreenYellow,
+		statusIndicator:  tcell.ColorDarkOrange,
+		identityText:     tcell.ColorGreenYellow,
 	}
 )
 
@@ -129,11 +139,12 @@ type Layout struct {
 	pages     *tview.Pages
 	pagesRoot string
 
-	grid *tview.Grid
+	root *tview.Grid
 	main *tview.Box
-	log  *LogView
 
-	sel *LibSelectView
+	logView   *LogView
+	libSelect *LibSelectView
+	helpInfo  *HelpInfoView
 
 	focusQueue chan FocusDelegator
 	focused    FocusDelegator
@@ -191,6 +202,10 @@ func (l *Layout) show() *ReturnCode {
 		}
 	}(l)
 
+	// signal monitor for refocus requests. when an event occurs that requires a
+	// new widget to be focused, this routine will call the interface-compliant
+	// widgets' event handlers to blur() and focus() the old and new widgets,
+	// respectively.
 	go func(l *Layout) {
 		for {
 			select {
@@ -211,7 +226,7 @@ func (l *Layout) show() *ReturnCode {
 		}
 	}(l)
 
-	l.focusQueue <- l.log
+	l.focusQueue <- l.logView
 
 	if err := l.ui.Run(); err != nil {
 		return rcTUIError.specf("show(): ui.Run(): %s", err)
@@ -224,6 +239,8 @@ func (l *Layout) show() *ReturnCode {
 // has its Layout field initialized with this instance.
 func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 
+	var layout Layout
+
 	ui := tview.NewApplication()
 
 	header := tview.NewBox().
@@ -232,12 +249,12 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 	main := tview.NewBox().
 		SetBorder(false)
 
-	log := newLogView(ui, "grid")
+	logView := newLogView(ui, "root")
 
 	footer := tview.NewBox().
 		SetBorder(false)
 
-	grid := tview.NewGrid().
+	root := tview.NewGrid().
 		// these are actual sizes, in terms of addressable terminal locations,
 		// i.e. characters and lines. the literal width and height values in the
 		// arguments to AddItem() are the logical sizes, in terms of rows and
@@ -246,34 +263,54 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetColumns(sideColumnWidth, 0, sideColumnWidth).
 		// fixed components that are always visible
 		AddItem(header /****/, 0, 0, 1, 3, 0, 0, false).
-		//
 		AddItem(main /******/, 1, 0, 1, 3, 0, 0, false).
-		//
-		AddItem(log /*******/, 2, 0, 1, 3, 0, 0, false).
+		AddItem(logView /***/, 2, 0, 1, 3, 0, 0, false).
 		AddItem(footer /****/, 3, 0, 1, 3, 0, 0, false)
 
-	grid. // other options for the primary layout grid
-		SetBorders(true)
+	root. // other options for the primary layout grid
+		SetBorders(true).
+		SetBorderColor(colorScheme.inactiveBorder)
 
-	sel := newLibSelectView(ui, "sel")
+	libSelect := newLibSelectView(ui, "libSelect")
+
+	helpInfo := newHelpInfoView(ui, "helpInfo")
 
 	pages := tview.NewPages().
-		AddPage("grid", grid, true, true).
-		AddPage("sel", sel, false, true)
+		AddPage("root", root, true, true).
+		AddPage(libSelect.page(), libSelect, false, true).
+		AddPage(helpInfo.page(), helpInfo, false, true)
 
-	layout := Layout{
-		ui:         ui,
-		option:     opt,
-		busy:       busy,
-		pages:      pages,
-		pagesRoot:  "grid",
-		grid:       grid,
-		main:       main,
-		log:        log,
-		sel:        sel,
+	header. // register the header bar screen drawing callback
+		SetDrawFunc(layout.drawMenuBar)
+
+	footer. // register the status bar screen drawing callback
+		SetDrawFunc(layout.drawStatusBar)
+
+	// define the higher-order tab cycle
+	logView.setDelegates(&layout, nil, nil)
+	libSelect.setDelegates(&layout, logView, logView)
+	helpInfo.setDelegates(&layout, nil, nil)
+
+	// and finally initialize our actual Layout object to be returned
+	layout = Layout{
+		ui:     ui,
+		option: opt,
+		busy:   busy,
+
+		pages:     pages,
+		pagesRoot: "root",
+
+		root: root,
+		main: main,
+
+		logView:   logView,
+		libSelect: libSelect,
+		helpInfo:  helpInfo,
+
 		focusQueue: make(chan FocusDelegator),
 		focused:    nil,
-		screen:     nil,
+
+		screen: nil,
 	}
 
 	// add a ref to this layout object to all libraries
@@ -281,17 +318,8 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		l.layout = &layout
 	}
 
+	// set the initial page displayed when application begins
 	pages.SwitchToPage(layout.pagesRoot)
-
-	// define the higher-order tab cycle
-	log.setDelegates(&layout, sel, sel)
-	sel.setDelegates(&layout, log, log)
-
-	header.
-		SetDrawFunc(layout.drawMenuBar)
-
-	footer. // register the status bar screen drawing callback
-		SetDrawFunc(layout.drawStatus)
 
 	ui. // global tview application configuration
 		SetRoot(pages, true).
@@ -315,7 +343,7 @@ func (l *Layout) shouldDelegateInputEvent(event *tcell.EventKey) bool {
 		switch event.Rune() {
 		case 'h', 'H', 'j', 'J', 'k', 'K', 'l', 'L':
 			// do NOT support the vi-style navigation keys in the log view
-			if l.focused == l.log {
+			if l.focused == l.logView {
 				return false
 			}
 		}
@@ -339,15 +367,22 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 			// user we can exit cleanly by simply pressing 'q'.
 			fwdEvent = nil
 
-		case tcell.KeyEsc, tcell.KeyEnter:
-			l.focusQueue <- l.log
+		case tcell.KeyEsc:
+			l.focusQueue <- l.logView
 
 		case tcell.KeyRune:
 			switch event.Rune() {
 			case 'l', 'L':
-				l.focusQueue <- l.sel
+				l.focusQueue <- l.libSelect
+			case 'h', 'H':
+				l.focusQueue <- l.helpInfo
 			case 'q', 'Q':
 				l.ui.Stop()
+			}
+
+			// TODO: remove me, exists only for eval of color palettes
+			if fn, ok := logColors[event.Rune()]; ok {
+				fn()
 			}
 
 		case tcell.KeyTab:
@@ -367,7 +402,17 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 	return fwdEvent
 }
 
+// function drawMenuBar() is the callback handler associated with the top-most
+// header box. this routine is not called on-demand, but is usually invoked
+// implicitly by other re-draw events.
 func (l *Layout) drawMenuBar(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
+
+	const (
+		libDimWidth   = 40 // library selection window width
+		libDimHeight  = 10 // ^----------------------- height
+		helpDimWidth  = 40 // help info window width
+		helpDimHeight = 10 // ^--------------- height
+	)
 
 	// update the layout's associated screen field. note that you must be very
 	// careful and not access this field until this status line has been drawn
@@ -376,19 +421,26 @@ func (l *Layout) drawMenuBar(screen tcell.Screen, x int, y int, width int, heigh
 		l.screen = &screen
 	}
 
+	l.libSelect.
+		SetRect(2, 1, libDimWidth, libDimHeight)
+
+	l.helpInfo.
+		SetRect(width-helpDimWidth, 1, helpDimWidth, helpDimHeight)
+
 	library := fmt.Sprintf("[::bu]%s[::-]%s:", "L", "ibrary")
 	help := fmt.Sprintf("[::bu]%s[::-]%s", "H", "elp")
 
-	tview.Print(screen, library, x+3, y, width, tview.AlignLeft, tview.Styles.PrimaryTextColor)
-	tview.Print(screen, help, x, y, width-3, tview.AlignRight, tview.Styles.PrimaryTextColor)
+	tview.Print(screen, library, x+3, y, width, tview.AlignLeft, colorScheme.inactiveMenuText)
+	tview.Print(screen, help, x, y, width-3, tview.AlignRight, colorScheme.inactiveMenuText)
 
+	// Coordinate space for subsequent draws.
 	return 0, 0, 0, 0
 }
 
-// function drawStatus() is the callback handler associated with the bottom-most
-// footer box. this routine is regularly called so that the datetime clock
+// function drawStatusBar() is the callback handler associated with the bottom-
+// most footer box. this routine is regularly called so that the datetime clock
 // remains accurate along with any status information currently available.
-func (l *Layout) drawStatus(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
+func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
 
 	// the number of periods to draw incrementally during the "working"
 	// animation is equal to: ellipses - 1
@@ -405,7 +457,7 @@ func (l *Layout) drawStatus(screen tcell.Screen, x int, y int, width int, height
 	dateTime := time.Now().Format("2006/01/02 15:04:05")
 
 	// Write some text along the horizontal line.
-	tview.Print(screen, dateTime, x+3, y, width, tview.AlignLeft, tcell.ColorGreen)
+	tview.Print(screen, dateTime, x+3, y, width, tview.AlignLeft, colorScheme.clockText)
 
 	// update the busy indicator if we have any active worker threads
 	count := l.busy.count()
@@ -416,11 +468,11 @@ func (l *Layout) drawStatus(screen tcell.Screen, x int, y int, width int, height
 		// draw the "working..." indicator. note the +2 is to make room for the
 		// moon rune following this indicator.
 		working := fmt.Sprintf("working%-*s", ellipses, bytes.Repeat([]byte{'.'}, cycle%ellipses))
-		tview.Print(screen, working, x-ellipses+1, y, width, tview.AlignRight, tcell.ColorAqua)
+		tview.Print(screen, working, x-ellipses+1, y, width, tview.AlignRight, colorScheme.statusText)
 
 		// draw the cyclic moon rotation
 		moon := fmt.Sprintf("%c ", MoonPhase[cycle%MoonPhaseLength])
-		tview.Print(screen, moon, x, y, width, tview.AlignRight, tcell.ColorDarkOrange)
+		tview.Print(screen, moon, x, y, width, tview.AlignRight, colorScheme.statusIndicator)
 	}
 
 	// Coordinate space for subsequent draws.
@@ -430,11 +482,66 @@ func (l *Layout) drawStatus(screen tcell.Screen, x int, y int, width int, height
 // type View defines the related fields describing any visual widget or
 // component displayed in a Layout.
 type FocusDelegator interface {
+	page() string
 	next() FocusDelegator
 	prev() FocusDelegator
 	focus()
 	blur()
-	page() string
+}
+
+type HelpInfoView struct {
+	*tview.Box
+	layout    *Layout
+	focusPage string
+	focusNext FocusDelegator
+	focusPrev FocusDelegator
+}
+
+// function newHelpInfoView() allocates and initializes the tview.Form widget
+// where the user selects which library to browse and any other filtering
+// options.
+func newHelpInfoView(ui *tview.Application, page string) *HelpInfoView {
+
+	view := tview.NewBox()
+
+	view.
+		SetBorder(true).
+		SetBorderColor(colorScheme.activeBorder).
+		SetTitle(" Help ").
+		SetTitleColor(colorScheme.activeMenuText).
+		SetTitleAlign(tview.AlignRight)
+
+	v := HelpInfoView{view, nil, page, nil, nil}
+
+	view.SetDrawFunc(v.drawHelpInfoView)
+
+	return &v
+}
+
+func (v *HelpInfoView) setDelegates(layout *Layout, prev, next FocusDelegator) {
+	v.layout = layout
+	v.focusPrev = prev
+	v.focusNext = next
+}
+func (v *HelpInfoView) page() string         { return v.focusPage }
+func (v *HelpInfoView) next() FocusDelegator { return v.focusNext }
+func (v *HelpInfoView) prev() FocusDelegator { return v.focusPrev }
+func (v *HelpInfoView) focus() {
+	page := v.page()
+	v.layout.pages.ShowPage(page)
+}
+func (v *HelpInfoView) blur() {
+	page := v.page()
+	v.layout.pages.HidePage(page)
+}
+func (v *HelpInfoView) drawHelpInfoView(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
+
+	swvers := fmt.Sprintf(" %s v%s (%s) ", identity, version, revision)
+
+	tview.Print(screen, swvers, x+1, y, width-2, tview.AlignLeft, colorScheme.identityText)
+
+	// Coordinate space for subsequent draws.
+	return 0, 0, 0, 0
 }
 
 type LibSelectView struct {
@@ -445,21 +552,23 @@ type LibSelectView struct {
 	focusPrev FocusDelegator
 }
 
-// function newLogView() allocates and initializes the tview.Form widget where
-// the user selects which library to browse and any other filtering options.
+// function newLibSelectView() allocates and initializes the tview.Form widget
+// where the user selects which library to browse and any other filtering
+// options.
 func newLibSelectView(ui *tview.Application, page string) *LibSelectView {
 
-	form := tview.NewForm()
+	view := tview.NewForm()
 
-	form.
+	view.
 		SetBorder(true).
-		SetTitle("Library").
+		SetBorderColor(colorScheme.activeBorder).
+		SetTitle(" Library ").
+		SetTitleColor(colorScheme.activeMenuText).
 		SetTitleAlign(tview.AlignLeft)
 
-	form.
-		SetRect(3, 1, 40, 10)
+	v := LibSelectView{view, nil, page, nil, nil}
 
-	return &LibSelectView{form, nil, page, nil, nil}
+	return &v
 }
 
 func (v *LibSelectView) setDelegates(layout *Layout, prev, next FocusDelegator) {
@@ -494,21 +603,23 @@ func newLogView(ui *tview.Application, page string) *LogView {
 	logChanged := func() { ui.QueueUpdateDraw(func() {}) }
 	logDone := func(key tcell.Key) {}
 
-	log := tview.NewTextView().
+	view := tview.NewTextView().
 		SetDynamicColors(true).
 		SetRegions(true).
 		SetScrollable(true).
 		SetTextAlign(tview.AlignLeft).
-		SetTextColor(tcell.ColorGhostWhite).
+		SetTextColor(colorScheme.activeText).
 		SetWordWrap(true).
 		SetWrap(false)
 
-	log. // update the TextView event handlers
+	view. // update the TextView event handlers
 		SetChangedFunc(logChanged).
 		SetDoneFunc(logDone).
 		SetBorder(false)
 
-	return &LogView{log, nil, page, nil, nil}
+	v := LogView{view, nil, page, nil, nil}
+
+	return &v
 }
 
 func (v *LogView) setDelegates(layout *Layout, prev, next FocusDelegator) {
@@ -525,4 +636,171 @@ func (v *LogView) focus() {
 	v.layout.ui.SetFocus(v.TextView)
 }
 func (v *LogView) blur() {
+}
+
+// -----------------------------------------------------------------------------
+//  temporary code below while evaluating color palettes
+// -----------------------------------------------------------------------------
+
+var logColors = map[rune]func(){
+
+	'1': func() {
+		infoLog.log("[#000000]ColorBlack")
+		infoLog.log("[#000080]ColorNavy")
+		infoLog.log("[#00008b]ColorDarkBlue")
+		infoLog.log("[#0000cd]ColorMediumBlue")
+		infoLog.log("[#0000ff]ColorBlue")
+		infoLog.log("[#006400]ColorDarkGreen")
+		infoLog.log("[#008000]ColorGreen")
+		infoLog.log("[#008080]ColorTeal")
+		infoLog.log("[#008b8b]ColorDarkCyan")
+		infoLog.log("[#00bfff]ColorDeepSkyBlue")
+		infoLog.log("[#00ced1]ColorDarkTurquoise")
+		infoLog.log("[#00fa9a]ColorMediumSpringGreen")
+		infoLog.log("[#00ff00]ColorLime")
+		infoLog.log("[#00ff7f]ColorSpringGreen")
+		infoLog.log("[#00ffff]ColorAqua")
+		infoLog.log("[#191970]ColorMidnightBlue")
+		infoLog.log("[#1e90ff]ColorDodgerBlue")
+		infoLog.log("[#20b2aa]ColorLightSeaGreen")
+		infoLog.log("[#228b22]ColorForestGreen")
+		infoLog.log("[#2e8b57]ColorSeaGreen")
+	},
+
+	'2': func() {
+		infoLog.log("[#2f4f4f]ColorDarkSlateGray")
+		infoLog.log("[#32cd32]ColorLimeGreen")
+		infoLog.log("[#3cb371]ColorMediumSeaGreen")
+		infoLog.log("[#40e0d0]ColorTurquoise")
+		infoLog.log("[#4169e1]ColorRoyalBlue")
+		infoLog.log("[#4682b4]ColorSteelBlue")
+		infoLog.log("[#483d8b]ColorDarkSlateBlue")
+		infoLog.log("[#48d1cc]ColorMediumTurquoise")
+		infoLog.log("[#4b0082]ColorIndigo")
+		infoLog.log("[#556b2f]ColorDarkOliveGreen")
+		infoLog.log("[#5f9ea0]ColorCadetBlue")
+		infoLog.log("[#6495ed]ColorCornflowerBlue")
+		infoLog.log("[#663399]ColorRebeccaPurple")
+		infoLog.log("[#66cdaa]ColorMediumAquamarine")
+		infoLog.log("[#696969]ColorDimGray")
+		infoLog.log("[#6a5acd]ColorSlateBlue")
+		infoLog.log("[#6b8e23]ColorOliveDrab")
+		infoLog.log("[#708090]ColorSlateGray")
+		infoLog.log("[#778899]ColorLightSlateGray")
+		infoLog.log("[#7b68ee]ColorMediumSlateBlue")
+	},
+
+	'3': func() {
+		infoLog.log("[#7cfc00]ColorLawnGreen")
+		infoLog.log("[#7fff00]ColorChartreuse")
+		infoLog.log("[#7fffd4]ColorAquaMarine")
+		infoLog.log("[#800000]ColorMaroon")
+		infoLog.log("[#800080]ColorPurple")
+		infoLog.log("[#808000]ColorOlive")
+		infoLog.log("[#808080]ColorGray")
+		infoLog.log("[#87ceeb]ColorSkyblue")
+		infoLog.log("[#87cefa]ColorLightSkyBlue")
+		infoLog.log("[#8a2be2]ColorBlueViolet")
+		infoLog.log("[#8b0000]ColorDarkRed")
+		infoLog.log("[#8b008b]ColorDarkMagenta")
+		infoLog.log("[#8b4513]ColorSaddleBrown")
+		infoLog.log("[#8fbc8f]ColorDarkSeaGreen")
+		infoLog.log("[#90ee90]ColorLightGreen")
+		infoLog.log("[#9370db]ColorMediumPurple")
+		infoLog.log("[#9400d3]ColorDarkViolet")
+		infoLog.log("[#98fb98]ColorPaleGreen")
+		infoLog.log("[#9932cc]ColorDarkOrchid")
+		infoLog.log("[#9acd32]ColorYellowGreen")
+	},
+
+	'4': func() {
+		infoLog.log("[#a0522d]ColorSienna")
+		infoLog.log("[#a52a2a]ColorBrown")
+		infoLog.log("[#a9a9a9]ColorDarkGray")
+		infoLog.log("[#add8e6]ColorLightBlue")
+		infoLog.log("[#adff2f]ColorGreenYellow")
+		infoLog.log("[#afeeee]ColorPaleTurquoise")
+		infoLog.log("[#b0c4de]ColorLightSteelBlue")
+		infoLog.log("[#b0e0e6]ColorPowderBlue")
+		infoLog.log("[#b22222]ColorFireBrick")
+		infoLog.log("[#b8860b]ColorDarkGoldenrod")
+		infoLog.log("[#ba55d3]ColorMediumOrchid")
+		infoLog.log("[#bc8f8f]ColorRosyBrown")
+		infoLog.log("[#bdb76b]ColorDarkKhaki")
+		infoLog.log("[#c0c0c0]ColorSilver")
+		infoLog.log("[#c71585]ColorMediumVioletRed")
+		infoLog.log("[#cd5c5c]ColorIndianRed")
+		infoLog.log("[#cd853f]ColorPeru")
+		infoLog.log("[#d2691e]ColorChocolate")
+		infoLog.log("[#d2b48c]ColorTan")
+		infoLog.log("[#d3d3d3]ColorLightGray")
+	},
+
+	'5': func() {
+		infoLog.log("[#d8bfd8]ColorThistle")
+		infoLog.log("[#da70d6]ColorOrchid")
+		infoLog.log("[#daa520]ColorGoldenrod")
+		infoLog.log("[#db7093]ColorPaleVioletRed")
+		infoLog.log("[#dc143c]ColorCrimson")
+		infoLog.log("[#dcdcdc]ColorGainsboro")
+		infoLog.log("[#dda0dd]ColorPlum")
+		infoLog.log("[#deb887]ColorBurlyWood")
+		infoLog.log("[#e0ffff]ColorLightCyan")
+		infoLog.log("[#e6e6fa]ColorLavender")
+		infoLog.log("[#e9967a]ColorDarkSalmon")
+		infoLog.log("[#ee82ee]ColorViolet")
+		infoLog.log("[#eee8aa]ColorPaleGoldenrod")
+		infoLog.log("[#f08080]ColorLightCoral")
+		infoLog.log("[#f0e68c]ColorKhaki")
+		infoLog.log("[#f0f8ff]ColorAliceBlue")
+		infoLog.log("[#f0fff0]ColorHoneydew")
+		infoLog.log("[#f0ffff]ColorAzure")
+		infoLog.log("[#f4a460]ColorSandyBrown")
+		infoLog.log("[#f5deb3]ColorWheat")
+	},
+
+	'6': func() {
+		infoLog.log("[#f5f5dc]ColorBeige")
+		infoLog.log("[#f5f5f5]ColorWhiteSmoke")
+		infoLog.log("[#f5fffa]ColorMintCream")
+		infoLog.log("[#f8f8ff]ColorGhostWhite")
+		infoLog.log("[#fa8072]ColorSalmon")
+		infoLog.log("[#faebd7]ColorAntiqueWhite")
+		infoLog.log("[#faf0e6]ColorLinen")
+		infoLog.log("[#fafad2]ColorLightGoldenrodYellow")
+		infoLog.log("[#fdf5e6]ColorOldLace")
+		infoLog.log("[#ff0000]ColorRed")
+		infoLog.log("[#ff00ff]ColorFuchsia")
+		infoLog.log("[#ff1493]ColorDeepPink")
+		infoLog.log("[#ff4500]ColorOrangeRed")
+		infoLog.log("[#ff6347]ColorTomato")
+		infoLog.log("[#ff69b4]ColorHotPink")
+		infoLog.log("[#ff7f50]ColorCoral")
+		infoLog.log("[#ff8c00]ColorDarkOrange")
+		infoLog.log("[#ffa07a]ColorLightSalmon")
+		infoLog.log("[#ffa500]ColorOrange")
+		infoLog.log("[#ffb6c1]ColorLightPink")
+	},
+
+	'7': func() {
+		infoLog.log("[#ffc0cb]ColorPink")
+		infoLog.log("[#ffd700]ColorGold")
+		infoLog.log("[#ffdab9]ColorPeachPuff")
+		infoLog.log("[#ffdead]ColorNavajoWhite")
+		infoLog.log("[#ffe4b5]ColorMoccasin")
+		infoLog.log("[#ffe4c4]ColorBisque")
+		infoLog.log("[#ffe4e1]ColorMistyRose")
+		infoLog.log("[#ffebcd]ColorBlanchedAlmond")
+		infoLog.log("[#ffefd5]ColorPapayaWhip")
+		infoLog.log("[#fff0f5]ColorLavenderBlush")
+		infoLog.log("[#fff5ee]ColorSeashell")
+		infoLog.log("[#fff8dc]ColorCornsilk")
+		infoLog.log("[#fffacd]ColorLemonChiffon")
+		infoLog.log("[#fffaf0]ColorFloralWhite")
+		infoLog.log("[#fffafa]ColorSnow")
+		infoLog.log("[#ffff00]ColorYellow")
+		infoLog.log("[#ffffe0]ColorLightYellow")
+		infoLog.log("[#fffff0]ColorIvory")
+		infoLog.log("[#ffffff]ColorWhite")
+	},
 }

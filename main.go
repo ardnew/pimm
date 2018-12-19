@@ -269,8 +269,8 @@ func main() {
 	if !isCLIMode {
 		layout = newLayout(options, busyState, library...)
 		// associate the loggers with the navigable log viewer.
-		layout.log.ScrollToEnd()
-		setWriterAll(layout.log)
+		layout.logView.ScrollToEnd()
+		setWriterAll(layout.logView)
 		select {
 		case <-initComplete:
 			// if there exists something in this channel, then we have already
