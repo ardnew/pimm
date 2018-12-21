@@ -140,11 +140,11 @@ type Layout struct {
 	pagesRoot string
 
 	root *tview.Grid
-	main *tview.Box
 
-	logView   *LogView
-	libSelect *LibSelectView
-	helpInfo  *HelpInfoView
+	browseView *BrowseView
+	logView    *LogView
+	libSelect  *LibSelectView
+	helpInfo   *HelpInfoView
 
 	focusQueue chan FocusDelegator
 	focused    FocusDelegator
@@ -246,8 +246,7 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 	header := tview.NewBox().
 		SetBorder(false)
 
-	main := tview.NewBox().
-		SetBorder(false)
+	browseView := newBrowseView(ui, "root")
 
 	logView := newLogView(ui, "root")
 
@@ -262,17 +261,16 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetRows(1, 0, logRowsHeight, 1).
 		SetColumns(sideColumnWidth, 0, sideColumnWidth).
 		// fixed components that are always visible
-		AddItem(header /****/, 0, 0, 1, 3, 0, 0, false).
-		AddItem(main /******/, 1, 0, 1, 3, 0, 0, false).
-		AddItem(logView /***/, 2, 0, 1, 3, 0, 0, false).
-		AddItem(footer /****/, 3, 0, 1, 3, 0, 0, false)
+		AddItem(header /******/, 0, 0, 1, 3, 0, 0, false).
+		AddItem(browseView /**/, 1, 0, 1, 3, 0, 0, false).
+		AddItem(logView /*****/, 2, 0, 1, 3, 0, 0, false).
+		AddItem(footer /******/, 3, 0, 1, 3, 0, 0, false)
 
 	root. // other options for the primary layout grid
 		SetBorders(true).
 		SetBorderColor(colorScheme.inactiveBorder)
 
 	libSelect := newLibSelectView(ui, "libSelect")
-
 	helpInfo := newHelpInfoView(ui, "helpInfo")
 
 	pages := tview.NewPages().
@@ -287,8 +285,9 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetDrawFunc(layout.drawStatusBar)
 
 	// define the higher-order tab cycle
-	logView.setDelegates(&layout, nil, nil)
-	libSelect.setDelegates(&layout, logView, logView)
+	browseView.setDelegates(&layout, libSelect, logView)
+	logView.setDelegates(&layout, browseView, libSelect)
+	libSelect.setDelegates(&layout, logView, browseView)
 	helpInfo.setDelegates(&layout, nil, nil)
 
 	// and finally initialize our actual Layout object to be returned
@@ -301,11 +300,11 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		pagesRoot: "root",
 
 		root: root,
-		main: main,
 
-		logView:   logView,
-		libSelect: libSelect,
-		helpInfo:  helpInfo,
+		browseView: browseView,
+		logView:    logView,
+		libSelect:  libSelect,
+		helpInfo:   helpInfo,
 
 		focusQueue: make(chan FocusDelegator),
 		focused:    nil,
@@ -588,6 +587,52 @@ func (v *LibSelectView) blur() {
 	v.layout.pages.HidePage(page)
 }
 
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+type BrowseView struct {
+	*tview.List
+	layout    *Layout
+	focusPage string
+	focusNext FocusDelegator
+	focusPrev FocusDelegator
+}
+
+// function newBrowseView() allocates and initializes the tview.List widget
+// where all of the currently available media can be browsed.
+func newBrowseView(ui *tview.Application, page string) *BrowseView {
+
+	list := tview.NewList().
+		AddItem("List item 1", "Some explanatory text", 'a', nil).
+		AddItem("List item 2", "Some explanatory text", 'b', nil).
+		AddItem("List item 3", "Some explanatory text", 'c', nil).
+		AddItem("List item 4", "Some explanatory text", 'd', nil).
+		AddItem("Quit", "Press to exit", 'q', func() {})
+
+	v := BrowseView{list, nil, page, nil, nil}
+
+	return &v
+}
+
+func (v *BrowseView) setDelegates(layout *Layout, prev, next FocusDelegator) {
+	v.layout = layout
+	v.focusPrev = prev
+	v.focusNext = next
+}
+func (v *BrowseView) page() string         { return v.focusPage }
+func (v *BrowseView) next() FocusDelegator { return v.focusNext }
+func (v *BrowseView) prev() FocusDelegator { return v.focusPrev }
+func (v *BrowseView) focus() {
+	page := v.page()
+	v.layout.pages.ShowPage(page)
+	v.layout.ui.SetFocus(v.List)
+}
+func (v *BrowseView) blur() {
+}
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
 type LogView struct {
 	*tview.TextView
 	layout    *Layout
@@ -639,168 +684,178 @@ func (v *LogView) blur() {
 }
 
 // -----------------------------------------------------------------------------
-//  temporary code below while evaluating color palettes
+//  TBD: temporary code below while evaluating color palettes
 // -----------------------------------------------------------------------------
 
 var logColors = map[rune]func(){
-
 	'1': func() {
-		infoLog.log("[#000000]ColorBlack")
+		// blue|navy
 		infoLog.log("[#000080]ColorNavy")
 		infoLog.log("[#00008b]ColorDarkBlue")
 		infoLog.log("[#0000cd]ColorMediumBlue")
 		infoLog.log("[#0000ff]ColorBlue")
-		infoLog.log("[#006400]ColorDarkGreen")
-		infoLog.log("[#008000]ColorGreen")
-		infoLog.log("[#008080]ColorTeal")
-		infoLog.log("[#008b8b]ColorDarkCyan")
 		infoLog.log("[#00bfff]ColorDeepSkyBlue")
-		infoLog.log("[#00ced1]ColorDarkTurquoise")
-		infoLog.log("[#00fa9a]ColorMediumSpringGreen")
-		infoLog.log("[#00ff00]ColorLime")
-		infoLog.log("[#00ff7f]ColorSpringGreen")
-		infoLog.log("[#00ffff]ColorAqua")
 		infoLog.log("[#191970]ColorMidnightBlue")
 		infoLog.log("[#1e90ff]ColorDodgerBlue")
-		infoLog.log("[#20b2aa]ColorLightSeaGreen")
-		infoLog.log("[#228b22]ColorForestGreen")
-		infoLog.log("[#2e8b57]ColorSeaGreen")
-	},
-
-	'2': func() {
-		infoLog.log("[#2f4f4f]ColorDarkSlateGray")
-		infoLog.log("[#32cd32]ColorLimeGreen")
-		infoLog.log("[#3cb371]ColorMediumSeaGreen")
-		infoLog.log("[#40e0d0]ColorTurquoise")
 		infoLog.log("[#4169e1]ColorRoyalBlue")
 		infoLog.log("[#4682b4]ColorSteelBlue")
 		infoLog.log("[#483d8b]ColorDarkSlateBlue")
-		infoLog.log("[#48d1cc]ColorMediumTurquoise")
-		infoLog.log("[#4b0082]ColorIndigo")
-		infoLog.log("[#556b2f]ColorDarkOliveGreen")
 		infoLog.log("[#5f9ea0]ColorCadetBlue")
 		infoLog.log("[#6495ed]ColorCornflowerBlue")
-		infoLog.log("[#663399]ColorRebeccaPurple")
-		infoLog.log("[#66cdaa]ColorMediumAquamarine")
-		infoLog.log("[#696969]ColorDimGray")
 		infoLog.log("[#6a5acd]ColorSlateBlue")
-		infoLog.log("[#6b8e23]ColorOliveDrab")
-		infoLog.log("[#708090]ColorSlateGray")
-		infoLog.log("[#778899]ColorLightSlateGray")
 		infoLog.log("[#7b68ee]ColorMediumSlateBlue")
-	},
-
-	'3': func() {
-		infoLog.log("[#7cfc00]ColorLawnGreen")
-		infoLog.log("[#7fff00]ColorChartreuse")
-		infoLog.log("[#7fffd4]ColorAquaMarine")
-		infoLog.log("[#800000]ColorMaroon")
-		infoLog.log("[#800080]ColorPurple")
-		infoLog.log("[#808000]ColorOlive")
-		infoLog.log("[#808080]ColorGray")
 		infoLog.log("[#87ceeb]ColorSkyblue")
 		infoLog.log("[#87cefa]ColorLightSkyBlue")
 		infoLog.log("[#8a2be2]ColorBlueViolet")
-		infoLog.log("[#8b0000]ColorDarkRed")
-		infoLog.log("[#8b008b]ColorDarkMagenta")
-		infoLog.log("[#8b4513]ColorSaddleBrown")
-		infoLog.log("[#8fbc8f]ColorDarkSeaGreen")
-		infoLog.log("[#90ee90]ColorLightGreen")
-		infoLog.log("[#9370db]ColorMediumPurple")
-		infoLog.log("[#9400d3]ColorDarkViolet")
-		infoLog.log("[#98fb98]ColorPaleGreen")
-		infoLog.log("[#9932cc]ColorDarkOrchid")
-		infoLog.log("[#9acd32]ColorYellowGreen")
-	},
-
-	'4': func() {
-		infoLog.log("[#a0522d]ColorSienna")
-		infoLog.log("[#a52a2a]ColorBrown")
-		infoLog.log("[#a9a9a9]ColorDarkGray")
 		infoLog.log("[#add8e6]ColorLightBlue")
-		infoLog.log("[#adff2f]ColorGreenYellow")
-		infoLog.log("[#afeeee]ColorPaleTurquoise")
 		infoLog.log("[#b0c4de]ColorLightSteelBlue")
 		infoLog.log("[#b0e0e6]ColorPowderBlue")
+		infoLog.log("[#f0f8ff]ColorAliceBlue")
+	},
+
+	'2': func() {
+		// red|pink|magenta|fire|crimson|tomato|salmon|coral|maroon|rose|seashell
+		infoLog.log("[#800000]ColorMaroon")
+		infoLog.log("[#8b0000]ColorDarkRed")
+		infoLog.log("[#8b008b]ColorDarkMagenta")
 		infoLog.log("[#b22222]ColorFireBrick")
-		infoLog.log("[#b8860b]ColorDarkGoldenrod")
-		infoLog.log("[#ba55d3]ColorMediumOrchid")
-		infoLog.log("[#bc8f8f]ColorRosyBrown")
-		infoLog.log("[#bdb76b]ColorDarkKhaki")
-		infoLog.log("[#c0c0c0]ColorSilver")
 		infoLog.log("[#c71585]ColorMediumVioletRed")
 		infoLog.log("[#cd5c5c]ColorIndianRed")
-		infoLog.log("[#cd853f]ColorPeru")
-		infoLog.log("[#d2691e]ColorChocolate")
-		infoLog.log("[#d2b48c]ColorTan")
-		infoLog.log("[#d3d3d3]ColorLightGray")
-	},
-
-	'5': func() {
-		infoLog.log("[#d8bfd8]ColorThistle")
-		infoLog.log("[#da70d6]ColorOrchid")
-		infoLog.log("[#daa520]ColorGoldenrod")
 		infoLog.log("[#db7093]ColorPaleVioletRed")
 		infoLog.log("[#dc143c]ColorCrimson")
-		infoLog.log("[#dcdcdc]ColorGainsboro")
-		infoLog.log("[#dda0dd]ColorPlum")
-		infoLog.log("[#deb887]ColorBurlyWood")
-		infoLog.log("[#e0ffff]ColorLightCyan")
-		infoLog.log("[#e6e6fa]ColorLavender")
 		infoLog.log("[#e9967a]ColorDarkSalmon")
-		infoLog.log("[#ee82ee]ColorViolet")
-		infoLog.log("[#eee8aa]ColorPaleGoldenrod")
 		infoLog.log("[#f08080]ColorLightCoral")
-		infoLog.log("[#f0e68c]ColorKhaki")
-		infoLog.log("[#f0f8ff]ColorAliceBlue")
-		infoLog.log("[#f0fff0]ColorHoneydew")
-		infoLog.log("[#f0ffff]ColorAzure")
-		infoLog.log("[#f4a460]ColorSandyBrown")
-		infoLog.log("[#f5deb3]ColorWheat")
-	},
-
-	'6': func() {
-		infoLog.log("[#f5f5dc]ColorBeige")
-		infoLog.log("[#f5f5f5]ColorWhiteSmoke")
-		infoLog.log("[#f5fffa]ColorMintCream")
-		infoLog.log("[#f8f8ff]ColorGhostWhite")
 		infoLog.log("[#fa8072]ColorSalmon")
-		infoLog.log("[#faebd7]ColorAntiqueWhite")
-		infoLog.log("[#faf0e6]ColorLinen")
-		infoLog.log("[#fafad2]ColorLightGoldenrodYellow")
-		infoLog.log("[#fdf5e6]ColorOldLace")
 		infoLog.log("[#ff0000]ColorRed")
-		infoLog.log("[#ff00ff]ColorFuchsia")
 		infoLog.log("[#ff1493]ColorDeepPink")
 		infoLog.log("[#ff4500]ColorOrangeRed")
 		infoLog.log("[#ff6347]ColorTomato")
 		infoLog.log("[#ff69b4]ColorHotPink")
 		infoLog.log("[#ff7f50]ColorCoral")
-		infoLog.log("[#ff8c00]ColorDarkOrange")
 		infoLog.log("[#ffa07a]ColorLightSalmon")
-		infoLog.log("[#ffa500]ColorOrange")
 		infoLog.log("[#ffb6c1]ColorLightPink")
+		infoLog.log("[#ffc0cb]ColorPink")
+		infoLog.log("[#ffe4e1]ColorMistyRose")
+		infoLog.log("[#fff5ee]ColorSeashell")
+	},
+
+	'3': func() {
+		// black|white|gray|grey|smoke|silver|gainsboro|linen|oldlace|snow|ivory
+		infoLog.log("[#000000]ColorBlack")
+		infoLog.log("[#2f4f4f]ColorDarkSlateGray")
+		infoLog.log("[#696969]ColorDimGray")
+		infoLog.log("[#708090]ColorSlateGray")
+		infoLog.log("[#778899]ColorLightSlateGray")
+		infoLog.log("[#808080]ColorGray")
+		infoLog.log("[#a9a9a9]ColorDarkGray")
+		infoLog.log("[#c0c0c0]ColorSilver")
+		infoLog.log("[#d3d3d3]ColorLightGray")
+		infoLog.log("[#dcdcdc]ColorGainsboro")
+		infoLog.log("[#f5f5f5]ColorWhiteSmoke")
+		infoLog.log("[#f8f8ff]ColorGhostWhite")
+		infoLog.log("[#faebd7]ColorAntiqueWhite")
+		infoLog.log("[#faf0e6]ColorLinen")
+		infoLog.log("[#fdf5e6]ColorOldLace")
+		infoLog.log("[#ffdead]ColorNavajoWhite")
+		infoLog.log("[#fffaf0]ColorFloralWhite")
+		infoLog.log("[#fffafa]ColorSnow")
+		infoLog.log("[#fffff0]ColorIvory")
+		infoLog.log("[#ffffff]ColorWhite")
+	},
+
+	'4': func() {
+		// green|lime|olive|chartreuse|mint
+		infoLog.log("[#006400]ColorDarkGreen")
+		infoLog.log("[#008000]ColorGreen")
+		infoLog.log("[#00fa9a]ColorMediumSpringGreen")
+		infoLog.log("[#00ff00]ColorLime")
+		infoLog.log("[#00ff7f]ColorSpringGreen")
+		infoLog.log("[#20b2aa]ColorLightSeaGreen")
+		infoLog.log("[#228b22]ColorForestGreen")
+		infoLog.log("[#2e8b57]ColorSeaGreen")
+		infoLog.log("[#32cd32]ColorLimeGreen")
+		infoLog.log("[#3cb371]ColorMediumSeaGreen")
+		infoLog.log("[#556b2f]ColorDarkOliveGreen")
+		infoLog.log("[#6b8e23]ColorOliveDrab")
+		infoLog.log("[#7cfc00]ColorLawnGreen")
+		infoLog.log("[#7fff00]ColorChartreuse")
+		infoLog.log("[#808000]ColorOlive")
+		infoLog.log("[#8fbc8f]ColorDarkSeaGreen")
+		infoLog.log("[#90ee90]ColorLightGreen")
+		infoLog.log("[#98fb98]ColorPaleGreen")
+		infoLog.log("[#9acd32]ColorYellowGreen")
+		infoLog.log("[#adff2f]ColorGreenYellow")
+		infoLog.log("[#f5fffa]ColorMintCream")
+	},
+
+	'5': func() {
+		// turquoise|teal|cyan|aqua|azure
+		infoLog.log("[#008080]ColorTeal")
+		infoLog.log("[#008b8b]ColorDarkCyan")
+		infoLog.log("[#00ced1]ColorDarkTurquoise")
+		infoLog.log("[#00ffff]ColorAqua")
+		infoLog.log("[#40e0d0]ColorTurquoise")
+		infoLog.log("[#48d1cc]ColorMediumTurquoise")
+		infoLog.log("[#66cdaa]ColorMediumAquamarine")
+		infoLog.log("[#7fffd4]ColorAquaMarine")
+		infoLog.log("[#afeeee]ColorPaleTurquoise")
+		infoLog.log("[#e0ffff]ColorLightCyan")
+		infoLog.log("[#f0ffff]ColorAzure")
+	},
+
+	'6': func() {
+		// purple|indigo|violet|lavender|fuchsia|orchid|thistle|plum
+		infoLog.log("[#4b0082]ColorIndigo")
+		infoLog.log("[#663399]ColorRebeccaPurple")
+		infoLog.log("[#800080]ColorPurple")
+		infoLog.log("[#9370db]ColorMediumPurple")
+		infoLog.log("[#9400d3]ColorDarkViolet")
+		infoLog.log("[#9932cc]ColorDarkOrchid")
+		infoLog.log("[#ba55d3]ColorMediumOrchid")
+		infoLog.log("[#d8bfd8]ColorThistle")
+		infoLog.log("[#da70d6]ColorOrchid")
+		infoLog.log("[#dda0dd]ColorPlum")
+		infoLog.log("[#e6e6fa]ColorLavender")
+		infoLog.log("[#ee82ee]ColorViolet")
+		infoLog.log("[#ff00ff]ColorFuchsia")
+		infoLog.log("[#fff0f5]ColorLavenderBlush")
 	},
 
 	'7': func() {
-		infoLog.log("[#ffc0cb]ColorPink")
+		// yellow|gold|corn|lemon|papaya|orange|peach|honeydew
+		infoLog.log("[#b8860b]ColorDarkGoldenrod")
+		infoLog.log("[#daa520]ColorGoldenrod")
+		infoLog.log("[#eee8aa]ColorPaleGoldenrod")
+		infoLog.log("[#f0fff0]ColorHoneydew")
+		infoLog.log("[#fafad2]ColorLightGoldenrodYellow")
+		infoLog.log("[#ff8c00]ColorDarkOrange")
+		infoLog.log("[#ffa500]ColorOrange")
 		infoLog.log("[#ffd700]ColorGold")
 		infoLog.log("[#ffdab9]ColorPeachPuff")
-		infoLog.log("[#ffdead]ColorNavajoWhite")
-		infoLog.log("[#ffe4b5]ColorMoccasin")
-		infoLog.log("[#ffe4c4]ColorBisque")
-		infoLog.log("[#ffe4e1]ColorMistyRose")
-		infoLog.log("[#ffebcd]ColorBlanchedAlmond")
 		infoLog.log("[#ffefd5]ColorPapayaWhip")
-		infoLog.log("[#fff0f5]ColorLavenderBlush")
-		infoLog.log("[#fff5ee]ColorSeashell")
 		infoLog.log("[#fff8dc]ColorCornsilk")
 		infoLog.log("[#fffacd]ColorLemonChiffon")
-		infoLog.log("[#fffaf0]ColorFloralWhite")
-		infoLog.log("[#fffafa]ColorSnow")
 		infoLog.log("[#ffff00]ColorYellow")
 		infoLog.log("[#ffffe0]ColorLightYellow")
-		infoLog.log("[#fffff0]ColorIvory")
-		infoLog.log("[#ffffff]ColorWhite")
+	},
+
+	'8': func() {
+		// brown|wheat|tan|sienna|peru|moccasin|bisque
+		infoLog.log("[#8b4513]ColorSaddleBrown")
+		infoLog.log("[#a0522d]ColorSienna")
+		infoLog.log("[#a52a2a]ColorBrown")
+		infoLog.log("[#bc8f8f]ColorRosyBrown")
+		infoLog.log("[#bdb76b]ColorDarkKhaki")
+		infoLog.log("[#cd853f]ColorPeru")
+		infoLog.log("[#d2691e]ColorChocolate")
+		infoLog.log("[#d2b48c]ColorTan")
+		infoLog.log("[#deb887]ColorBurlyWood")
+		infoLog.log("[#f0e68c]ColorKhaki")
+		infoLog.log("[#f4a460]ColorSandyBrown")
+		infoLog.log("[#f5deb3]ColorWheat")
+		infoLog.log("[#f5f5dc]ColorBeige")
+		infoLog.log("[#ffe4b5]ColorMoccasin")
+		infoLog.log("[#ffe4c4]ColorBisque")
+		infoLog.log("[#ffebcd]ColorBlanchedAlmond")
 	},
 }
