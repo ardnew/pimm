@@ -19,6 +19,7 @@ import (
 
 	"bytes"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -46,8 +47,8 @@ var (
 		statusIndicator  tcell.Color
 		identityText     tcell.Color
 	}{
-		inactiveText:     tcell.ColorGray,
-		activeText:       tcell.ColorLightSlateGray,
+		inactiveText:     tcell.ColorDarkSlateGray,
+		activeText:       tcell.ColorWhiteSmoke,
 		inactiveMenuText: tcell.ColorSkyblue,
 		activeMenuText:   tcell.ColorDodgerBlue,
 		inactiveBorder:   tcell.ColorWhite,
@@ -129,6 +130,18 @@ func (s *BusyState) reset() {
 	atomic.StoreUint64(&s.busyCycle, 0)
 }
 
+// type FocusDelegator defines the methods that must exist for any widget or
+// visual entity that can be focused for interaction by the user.
+type FocusDelegator interface {
+	desc() string // identity for debugging!
+	setDelegates(*Layout, FocusDelegator, FocusDelegator)
+	page() string
+	next() FocusDelegator
+	prev() FocusDelegator
+	focus() // you must NOT write to the (*Layout).focusQueue from either of
+	blur()  // these methods, or you -will- cause deadlock!!
+}
+
 // type Layout holds the high level components of the terminal user interface
 // as well as the main tview runtime API object tview.Application.
 type Layout struct {
@@ -141,12 +154,15 @@ type Layout struct {
 
 	root *tview.Grid
 
+	quitModal  *QuitDialog
+	helpInfo   *HelpInfoView
+	libSelect  *LibSelectView
 	browseView *BrowseView
 	logView    *LogView
-	libSelect  *LibSelectView
-	helpInfo   *HelpInfoView
 
 	focusQueue chan FocusDelegator
+	focusLock  sync.Mutex
+	focusBase  FocusDelegator
 	focused    FocusDelegator
 
 	// NOTE: this screen var won't get set until one of the draw routines which
@@ -211,6 +227,7 @@ func (l *Layout) show() *ReturnCode {
 			select {
 			case delegate := <-l.focusQueue:
 				if delegate != nil {
+					l.focusLock.Lock()
 					if delegate != l.focused {
 						if l.focused != nil {
 							l.focused.blur()
@@ -220,18 +237,29 @@ func (l *Layout) show() *ReturnCode {
 						// decisions based on which was previously focused.
 						l.focused = delegate
 					}
+					l.focusLock.Unlock()
 					l.ui.Draw()
 				}
 			}
 		}
 	}(l)
 
-	l.focusQueue <- l.logView
+	// the default view to focus when no other view is explicitly requested
+	l.focusBase = l.browseView
+	l.focusQueue <- l.focusBase
+
+	l.logView.ScrollToEnd()
 
 	if err := l.ui.Run(); err != nil {
 		return rcTUIError.specf("show(): ui.Run(): %s", err)
 	}
 	return nil
+}
+
+func stop(ui *tview.Application) {
+	if nil != ui {
+		ui.Stop()
+	}
 }
 
 // function newLayout() creates the initial layout of the user interface and
@@ -247,7 +275,6 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetBorder(false)
 
 	browseView := newBrowseView(ui, "root")
-
 	logView := newLogView(ui, "root")
 
 	footer := tview.NewBox().
@@ -270,11 +297,13 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetBorders(true).
 		SetBorderColor(colorScheme.inactiveBorder)
 
+	quitModal := newQuitDialog(ui, "quitModal")
 	libSelect := newLibSelectView(ui, "libSelect")
 	helpInfo := newHelpInfoView(ui, "helpInfo")
 
 	pages := tview.NewPages().
 		AddPage("root", root, true, true).
+		AddPage(quitModal.page(), quitModal, false, true).
 		AddPage(libSelect.page(), libSelect, false, true).
 		AddPage(helpInfo.page(), helpInfo, false, true)
 
@@ -285,9 +314,10 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetDrawFunc(layout.drawStatusBar)
 
 	// define the higher-order tab cycle
-	browseView.setDelegates(&layout, libSelect, logView)
-	logView.setDelegates(&layout, browseView, libSelect)
-	libSelect.setDelegates(&layout, logView, browseView)
+	browseView.setDelegates(&layout, nil, nil)
+	logView.setDelegates(&layout, nil, nil)
+	quitModal.setDelegates(&layout, nil, nil)
+	libSelect.setDelegates(&layout, nil, nil)
 	helpInfo.setDelegates(&layout, nil, nil)
 
 	// and finally initialize our actual Layout object to be returned
@@ -301,12 +331,15 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 
 		root: root,
 
+		quitModal:  quitModal,
+		helpInfo:   helpInfo,
+		libSelect:  libSelect,
 		browseView: browseView,
 		logView:    logView,
-		libSelect:  libSelect,
-		helpInfo:   helpInfo,
 
 		focusQueue: make(chan FocusDelegator),
+		focusLock:  sync.Mutex{},
+		focusBase:  nil,
 		focused:    nil,
 
 		screen: nil,
@@ -327,14 +360,6 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 	return &layout
 }
 
-// function isGlobalInputEvent() determines if the program is in a state to
-// accept global input keys. for example, if the program is currently presenting
-// a modal window or dialog, then we don't necessarily want to allow the global
-// cycle-focused-view event key.
-func (l *Layout) isGlobalInputEvent(event *tcell.EventKey) bool {
-	return true
-}
-
 func (l *Layout) shouldDelegateInputEvent(event *tcell.EventKey) bool {
 
 	switch event.Key() {
@@ -342,7 +367,10 @@ func (l *Layout) shouldDelegateInputEvent(event *tcell.EventKey) bool {
 		switch event.Rune() {
 		case 'h', 'H', 'j', 'J', 'k', 'K', 'l', 'L':
 			// do NOT support the vi-style navigation keys in the log view
-			if l.focused == l.logView {
+			l.focusLock.Lock()
+			focused := l.focused
+			l.focusLock.Unlock()
+			if focused == l.logView {
 				return false
 			}
 		}
@@ -358,44 +386,108 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 
 	fwdEvent := event
 
-	if l.isGlobalInputEvent(event) {
+	l.focusLock.Lock()
+	focused := l.focused
+	l.focusLock.Unlock()
 
-		switch event.Key() {
-		case tcell.KeyCtrlC:
-			// don't exit on Ctrl+C, it feels unsanitary. instead, notify the
-			// user we can exit cleanly by simply pressing 'q'.
-			fwdEvent = nil
+	evTime := event.When()
+	evMod := event.Modifiers()
+	evKey := event.Key()
+	evRune := event.Rune()
 
-		case tcell.KeyEsc:
-			l.focusQueue <- l.logView
+	// catch some global, application-level events before evaluating them in the
+	// context of whatever view is currently focused.
+	switch {
+	case tcell.KeyCtrlC == evKey:
+		// don't exit on Ctrl+C, it feels unsanitary. instead, notify the
+		// user we can exit cleanly by simply pressing 'q'.
+		fwdEvent = nil
+		infoLog.logf("Please use '%c' key to terminate the application. "+
+			"Ctrl keys are swallowed to prevent choking.", 'q')
+	}
 
+	navigationEvent := func(lo *Layout, ek tcell.Key, er rune, em tcell.ModMask, et time.Time) bool {
+		switch ek {
 		case tcell.KeyRune:
-			switch event.Rune() {
+			switch er {
 			case 'l', 'L':
-				l.focusQueue <- l.libSelect
+				lo.focusQueue <- lo.libSelect
+				return true
 			case 'h', 'H':
-				l.focusQueue <- l.helpInfo
-			case 'q', 'Q':
-				l.ui.Stop()
+				lo.focusQueue <- lo.helpInfo
+				return true
+			case 'v', 'V':
+				lo.focusQueue <- lo.logView
+				return true
 			}
 
 			// TODO: remove me, exists only for eval of color palettes
-			if fn, ok := logColors[event.Rune()]; ok {
+			if fn, ok := logColors[er]; ok {
 				fn()
+				return true
 			}
+		}
+		return false
+	}
 
-		case tcell.KeyTab:
-			if nil != l.focused {
-				next := l.focused.next()
-				if nil != next {
-					l.focusQueue <- next
-				}
+	exitEvent := func(lo *Layout, ek tcell.Key, er rune, em tcell.ModMask, et time.Time) bool {
+		switch ek {
+		case tcell.KeyRune:
+			switch er {
+			case 'q', 'Q':
+				return true
+			}
+		}
+		return false
+	}
+
+	switch focused.(type) {
+
+	case *HelpInfoView:
+		if !navigationEvent(l, evKey, evRune, evMod, evTime) {
+			switch evKey {
+			case tcell.KeyEsc, tcell.KeyRune:
+				l.focusQueue <- l.focusBase
+			}
+			if exitEvent(l, evKey, evRune, evMod, evTime) {
+				l.focusQueue <- l.quitModal
 			}
 		}
 
-		if !l.shouldDelegateInputEvent(event) {
-			fwdEvent = nil
+	case *LibSelectView:
+		switch evKey {
+		case tcell.KeyEsc:
+			l.focusQueue <- l.focusBase
 		}
+		if exitEvent(l, evKey, evRune, evMod, evTime) {
+			l.focusQueue <- l.quitModal
+		}
+
+	case *BrowseView:
+		if !navigationEvent(l, evKey, evRune, evMod, evTime) {
+			switch evKey {
+			case tcell.KeyEsc:
+				l.focusQueue <- l.focusBase
+			}
+			if exitEvent(l, evKey, evRune, evMod, evTime) {
+				l.focusQueue <- l.quitModal
+			}
+		}
+
+	case *LogView:
+		if !navigationEvent(l, evKey, evRune, evMod, evTime) {
+			switch evKey {
+			case tcell.KeyEsc:
+				l.focusQueue <- l.focusBase
+			}
+			if exitEvent(l, evKey, evRune, evMod, evTime) {
+				l.focusQueue <- l.quitModal
+			}
+		}
+	}
+
+	if !l.shouldDelegateInputEvent(event) {
+		fwdEvent = nil
 	}
 
 	return fwdEvent
@@ -478,15 +570,127 @@ func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, hei
 	return 0, 0, 0, 0
 }
 
-// type View defines the related fields describing any visual widget or
-// component displayed in a Layout.
-type FocusDelegator interface {
-	page() string
-	next() FocusDelegator
-	prev() FocusDelegator
-	focus()
-	blur()
+var mediaOrder []string
+
+func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
+
+	mediaOrder = []string{}
+
+	insertionIndex := func(name string) int {
+
+		if len(mediaOrder) == 0 {
+			return 0
+		}
+
+		for i, media := range mediaOrder {
+			if media >= name {
+				return i
+			}
+		}
+		n := len(mediaOrder)
+		mediaOrder = append(mediaOrder, name)
+		return n
+	}
+
+	var name, path string
+
+	switch disco.data[0].(type) {
+	case *AudioMedia:
+		audio := disco.data[0].(*AudioMedia)
+		name = audio.AbsName
+		path = audio.AbsPath
+		//infoLog.logf("adding audio: %+v", audio)
+	case *VideoMedia:
+		video := disco.data[0].(*VideoMedia)
+		name = video.AbsName
+		path = video.AbsPath
+		//infoLog.logf("adding video: %+v", video)
+	case *Subtitles:
+		subs := disco.data[0].(*Subtitles)
+		name = subs.AbsName
+		path = subs.AbsPath
+		//infoLog.logf("adding subtitles: %+v", subs)
+	}
+
+	pos := insertionIndex(name)
+	l.ui.QueueUpdate(func() {
+		l.browseView.InsertItem(pos, name, path, 0, nil)
+	})
+
+	return nil
 }
+
+//------------------------------------------------------------------------------
+
+type QuitDialog struct {
+	*tview.Modal
+	layout    *Layout
+	focusPage string
+	focusNext FocusDelegator
+	focusPrev FocusDelegator
+}
+
+// function newQuitDialog() allocates and initializes the tview.Modal widget
+// that prompts the user to confirm before quitting the application.
+func newQuitDialog(ui *tview.Application, page string) *QuitDialog {
+
+	prompt := "Oh, so you're a quitter, huh?"
+	button := []string{"Y-yeah...", " Fuck NO "}
+
+	view := tview.NewModal().
+		SetText(prompt).
+		AddButtons(button)
+
+	view.
+		SetBorder(true).
+		SetBorderColor(colorScheme.activeBorder).
+		SetTitle(" Quit ").
+		SetTitleColor(colorScheme.activeMenuText).
+		SetTitleAlign(tview.AlignRight)
+
+	v := QuitDialog{view, nil, page, nil, nil}
+
+	v.SetDoneFunc(
+		func(buttonIndex int, buttonLabel string) {
+			switch {
+			case button[0] == buttonLabel:
+				stop(ui)
+			case button[1] == buttonLabel:
+				v.layout.focusQueue <- v.layout.focusBase
+			}
+		})
+
+	return &v
+}
+
+func (v *QuitDialog) desc() string { return "" }
+func (v *QuitDialog) setDelegates(layout *Layout, prev, next FocusDelegator) {
+	v.layout = layout
+	v.focusPrev = prev
+	v.focusNext = next
+}
+func (v *QuitDialog) page() string         { return v.focusPage }
+func (v *QuitDialog) next() FocusDelegator { return v.focusNext }
+func (v *QuitDialog) prev() FocusDelegator { return v.focusPrev }
+func (v *QuitDialog) focus() {
+	page := v.page()
+	v.layout.pages.ShowPage(page)
+}
+func (v *QuitDialog) blur() {
+	page := v.page()
+	v.layout.pages.HidePage(page)
+}
+func (v *QuitDialog) drawQuitDialog(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
+
+	swvers := fmt.Sprintf(" %s v%s (%s) ", identity, version, revision)
+
+	tview.Print(screen, swvers, x+1, y, width-2, tview.AlignLeft, colorScheme.identityText)
+
+	// Coordinate space for subsequent draws.
+	return 0, 0, 0, 0
+}
+
+//------------------------------------------------------------------------------
 
 type HelpInfoView struct {
 	*tview.Box
@@ -517,6 +721,7 @@ func newHelpInfoView(ui *tview.Application, page string) *HelpInfoView {
 	return &v
 }
 
+func (v *HelpInfoView) desc() string { return "" }
 func (v *HelpInfoView) setDelegates(layout *Layout, prev, next FocusDelegator) {
 	v.layout = layout
 	v.focusPrev = prev
@@ -542,6 +747,8 @@ func (v *HelpInfoView) drawHelpInfoView(screen tcell.Screen, x int, y int, width
 	// Coordinate space for subsequent draws.
 	return 0, 0, 0, 0
 }
+
+//------------------------------------------------------------------------------
 
 type LibSelectView struct {
 	*tview.Form
@@ -570,6 +777,7 @@ func newLibSelectView(ui *tview.Application, page string) *LibSelectView {
 	return &v
 }
 
+func (v *LibSelectView) desc() string { return "" }
 func (v *LibSelectView) setDelegates(layout *Layout, prev, next FocusDelegator) {
 	v.layout = layout
 	v.focusPrev = prev
@@ -588,7 +796,6 @@ func (v *LibSelectView) blur() {
 }
 
 //------------------------------------------------------------------------------
-//------------------------------------------------------------------------------
 
 type BrowseView struct {
 	*tview.List
@@ -603,17 +810,19 @@ type BrowseView struct {
 func newBrowseView(ui *tview.Application, page string) *BrowseView {
 
 	list := tview.NewList().
-		AddItem("List item 1", "Some explanatory text", 'a', nil).
-		AddItem("List item 2", "Some explanatory text", 'b', nil).
-		AddItem("List item 3", "Some explanatory text", 'c', nil).
-		AddItem("List item 4", "Some explanatory text", 'd', nil).
-		AddItem("Quit", "Press to exit", 'q', func() {})
+		SetSelectedFocusOnly(false)
+		//AddItem("List item 1", "Some explanatory text", 0, nil).
+		//AddItem("List item 2", "Some explanatory text", 0, nil).
+		//AddItem("List item 3", "Some explanatory text", 0, nil).
+		//AddItem("List item 4", "Some explanatory text", 0, nil).
+		//AddItem("Quit", "Press to exit", 0, func() {})
 
 	v := BrowseView{list, nil, page, nil, nil}
 
 	return &v
 }
 
+func (v *BrowseView) desc() string { return "" }
 func (v *BrowseView) setDelegates(layout *Layout, prev, next FocusDelegator) {
 	v.layout = layout
 	v.focusPrev = prev
@@ -623,6 +832,10 @@ func (v *BrowseView) page() string         { return v.focusPage }
 func (v *BrowseView) next() FocusDelegator { return v.focusNext }
 func (v *BrowseView) prev() FocusDelegator { return v.focusPrev }
 func (v *BrowseView) focus() {
+	//x, y, w, h := v.List.GetRect()
+	//infoLog.logf("rect = {X:%d, Y:%d}, {W:%d, H:%d}", x, y, w, h)
+	//x, y, w, h = v.layout.logView.TextView.GetRect()
+	//infoLog.logf("rect = {X:%d, Y:%d}, {W:%d, H:%d}", x, y, w, h)
 	page := v.page()
 	v.layout.pages.ShowPage(page)
 	v.layout.ui.SetFocus(v.List)
@@ -630,7 +843,6 @@ func (v *BrowseView) focus() {
 func (v *BrowseView) blur() {
 }
 
-//------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
 type LogView struct {
@@ -653,7 +865,7 @@ func newLogView(ui *tview.Application, page string) *LogView {
 		SetRegions(true).
 		SetScrollable(true).
 		SetTextAlign(tview.AlignLeft).
-		SetTextColor(colorScheme.activeText).
+		SetTextColor(colorScheme.inactiveText).
 		SetWordWrap(true).
 		SetWrap(false)
 
@@ -667,6 +879,7 @@ func newLogView(ui *tview.Application, page string) *LogView {
 	return &v
 }
 
+func (v *LogView) desc() string { return "" }
 func (v *LogView) setDelegates(layout *Layout, prev, next FocusDelegator) {
 	v.layout = layout
 	v.focusPrev = prev
@@ -679,8 +892,10 @@ func (v *LogView) focus() {
 	page := v.page()
 	v.layout.pages.ShowPage(page)
 	v.layout.ui.SetFocus(v.TextView)
+	v.TextView.SetTextColor(colorScheme.activeText)
 }
 func (v *LogView) blur() {
+	v.TextView.SetTextColor(colorScheme.inactiveText)
 }
 
 // -----------------------------------------------------------------------------

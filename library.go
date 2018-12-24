@@ -278,7 +278,7 @@ func (l *Library) loadDive(ph *PathHandler, class EntityClass, kind int) (uint, 
 					subs.fromRecord(data)
 					infoLog.tracef("loaded subtitles (ID={%q,%X}): %s", l.name, id, subs)
 					if nil != ph && nil != ph.handleSupport {
-						ph.handleSupport(l, subs.AbsPath, skSubtitles, subs, id)
+						ph.handleSupport(l, subs.AbsPath, subs, id)
 					}
 				default:
 				}
@@ -315,7 +315,9 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 	// isn't already filled to capacity.
 	select {
 	case l.loadStart <- time.Now():
-		l.busyState.inc()
+		if !isCLIMode {
+			l.busyState.inc()
+		}
 		// the write succeeded, so we can initiate loading. keep track of the
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
@@ -331,7 +333,9 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 			}
 		}
 		l.loadElapsed = time.Since(<-l.loadStart)
-		l.busyState.dec()
+		if !isCLIMode {
+			l.busyState.dec()
+		}
 
 		total, summary := l.db.totalRecordsString(dmLoad, -1, -1)
 		if total > 0 {
@@ -524,7 +528,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 							l.db.numRecordsScan[ecSupport][kind]++
 							infoLog.tracef("discovered subtitles (ID={%q,%X}): %s", l.name, id, subs)
 							if nil != ph && nil != ph.handleSupport {
-								ph.handleSupport(l, absPath, skSubtitles, subs, id)
+								ph.handleSupport(l, absPath, subs, id)
 							}
 						} else {
 							return rcDatabaseError.specf(
@@ -571,7 +575,9 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 	// isn't already filled to capacity.
 	select {
 	case l.scanStart <- time.Now():
-		l.busyState.inc()
+		if !isCLIMode {
+			l.busyState.inc()
+		}
 		// the write succeeded, so we can initiate scanning. keep track of the
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
@@ -581,7 +587,9 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 			l.recandidateSubtitles(false)
 		}
 		l.scanElapsed = time.Since(<-l.scanStart)
-		l.busyState.dec()
+		if !isCLIMode {
+			l.busyState.dec()
+		}
 
 		total, summary := l.db.totalRecordsString(dmScan, -1, -1)
 		if total > 0 {

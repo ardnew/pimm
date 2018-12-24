@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"sync"
 	"time"
 )
 
@@ -49,7 +50,7 @@ var (
 	adjBad = [...]string{"an atrocious", "a bad", "an awful", "a cheap", "a crummy", "a dreadful", "a lousy", "a poor", "a rough", "a sad", "an unacceptable", "a blah", "a bummer", "a diddly", "a downer", "a garbage", "a gross", "an imperfect", "an inferior", "a junky", "a synthetic", "an abominable", "an amiss", "a bad news", "a beastly", "a bottom out", "a careless", "a cheesy", "a crappy", "a cruddy", "a defective", "a deficient", "a dissatisfactory", "an erroneous", "a fallacious", "a faulty", "a godawful", "a grody", "a grungy", "an icky", "an inadequate", "an incorrect", "a not good", "an off", "a raunchy", "a slipshod", "a stinking", "a substandard", "an unsatisfactory"}
 )
 
-// various globals that should not be written to from outside this unit.
+// various globals available to all units.
 var (
 	areOptionsParsed bool = false
 )
@@ -247,8 +248,9 @@ func main() {
 	}
 
 	// libraries ready, spool up the library scanners.
+	var __orderedList []string = make([]string, 0)
 	scanStart := time.Now()
-	populateLibrary(options, library)
+	populateLibrary(options, library, &__orderedList)
 
 	go func(lib []*Library, start time.Time) {
 
@@ -269,7 +271,6 @@ func main() {
 	if !isCLIMode {
 		layout = newLayout(options, busyState, library...)
 		// associate the loggers with the navigable log viewer.
-		layout.logView.ScrollToEnd()
 		setWriterAll(layout.logView)
 		select {
 		case <-initComplete:
@@ -288,6 +289,10 @@ func main() {
 		}
 	} else {
 		<-initComplete
+	}
+
+	for i, s := range __orderedList {
+		infoLog.logf("[%d] %s", i, s)
 	}
 
 	// create the memory profiler output if requested
@@ -563,7 +568,7 @@ func initLibrary(options *Options, busyState *BusyState) []*Library {
 // function populateLibrary() spawns goroutines to scan each library
 // concurrently. it also spawns goroutines that listen via channels for new
 // media discovered (see function watchLibrary() for handlers).
-func populateLibrary(options *Options, library []*Library) {
+func populateLibrary(options *Options, library []*Library, __orderedList *[]string) {
 
 	// for each library, dispatch a few (3) goroutines in the following order:
 	//   1. begin listening for content on the new-media and new-directory
@@ -578,7 +583,7 @@ func populateLibrary(options *Options, library []*Library) {
 		// 1. spool up the discovery channel polling, handling the content as it
 		//    is received -- the media is considered valid if it has reached the
 		//    channel.
-		go watchLibrary(lib, options.DiscoveryInterval.Duration)
+		go watchLibrary(lib, options.DiscoveryInterval.Duration, __orderedList)
 
 		// 2. pull all of the media already known to exist in the library from
 		//    the local database, verify it still exists, then notify the
@@ -649,7 +654,6 @@ func populateLibrary(options *Options, library []*Library) {
 			}
 			l.scanComplete <- numMedia
 		}(lib)
-
 	}
 }
 
@@ -657,22 +661,132 @@ func populateLibrary(options *Options, library []*Library) {
 // handles new media as they are discovered. the media has been validated before
 // it is written to the channel, so you can safely assume the media here exists
 // and is desirable.
-func watchLibrary(lib *Library, ival time.Duration) {
+func watchLibrary(lib *Library, ival time.Duration, __orderedList *[]string) {
+
+	var listLock sync.Mutex = sync.Mutex{}
+	var count int = 0
+
+	addItem := func(s string) {
+		*__orderedList = append(*__orderedList, s)
+	}
+	insertItem := func(i int, s string) {
+		if i >= 0 {
+			// if the i provided is greater than the number of elements in the list,
+			// just treat this like an ordinary append, using the exported AddItem()
+			if i >= len(*__orderedList) {
+				addItem(s)
+			}
+			*__orderedList = append(*__orderedList, "")
+			copy((*__orderedList)[i+1:], (*__orderedList)[i:])
+			(*__orderedList)[i] = s
+		}
+	}
+	insertIndex := func(s string) int {
+		n := len(*__orderedList)
+		if n == 0 {
+			return 0
+		}
+		for i, t := range *__orderedList {
+			if t >= s {
+				return i
+			}
+		}
+		return n
+	}
+
 	infoLog.tracef("polling discovery buffer every %s", ival)
 	// continuously monitors a library's signal channels for new content, which
 	// creates or processes the content accordingly.
 	for {
 		// TODO: relay the discovery to anyone that needs to know. the library
-		//       has already finished with whatever it was doing, so the data
-		//       should be fully initialized and ready to be handled.
+		// has already finished with whatever it was doing, so the data should
+		// be fully initialized and ready to be handled.
 		select {
 		case <-time.After(ival):
 		DRAIN:
 			for {
+				// TODO: accessing lib.layout here seems very risky, because it
+				// looks to me like it is possible for one of these channels to
+				// potentially be available before layout is even created (that
+				// is -- newLayout() is called AFTER watchLibrary()). but i've
+				// yet to encounter a segfault, so maybe one of the artificual
+				// goroutine rendezvous i've created protects us... who knows!
+				// until then, knock on wood...
+
 				select {
-				case /* v := */ <-lib.newMedia:
-				case /* v := */ <-lib.newSupport:
+
+				case ent := <-lib.newMedia:
+
+					listLock.Lock()
+					count = count + 1
+					listLock.Unlock()
+
+					if isCLIMode {
+						// NOOP, nothing more to do if in CLI mode
+						var name string
+						switch ent.data[0].(type) {
+						case *AudioMedia:
+							name = ent.data[0].(*AudioMedia).AbsPath
+						case *VideoMedia:
+							name = ent.data[0].(*VideoMedia).AbsPath
+						case *Subtitles:
+							name = ent.data[0].(*Subtitles).AbsPath
+						default:
+							infoLog.logf("default case: %+v", ent)
+						}
+						name = fmt.Sprintf("\"%s\"", name)
+						pos := insertIndex(name)
+						insertItem(pos, name)
+
+						infoLog.logf("count = %d", count)
+
+					} else {
+						if nil == lib.layout {
+							panic(rcTUIError.spec("cannot add media to layout: terminal interface not ready"))
+						} else {
+							if rc := lib.layout.addDiscovery(lib, ent); nil != rc {
+
+							}
+						}
+					}
+
+				case ent := <-lib.newSupport:
+
+					listLock.Lock()
+					count = count + 1
+					listLock.Unlock()
+
+					if isCLIMode {
+						// NOOP, nothing more to do if in CLI mode
+						var name string
+						switch ent.data[0].(type) {
+						case *AudioMedia:
+							name = ent.data[0].(*AudioMedia).AbsPath
+						case *VideoMedia:
+							name = ent.data[0].(*VideoMedia).AbsPath
+						case *Subtitles:
+							name = ent.data[0].(*Subtitles).AbsPath
+						default:
+							infoLog.logf("default case: %+v", ent)
+						}
+						name = fmt.Sprintf("\"%s\"", name)
+						pos := insertIndex(name)
+						insertItem(pos, name)
+
+						infoLog.logf("count = %d", count)
+
+					} else {
+						if nil == lib.layout {
+							panic(rcTUIError.spec("cannot add support file to layout: terminal interface not ready"))
+						} else {
+							if rc := lib.layout.addDiscovery(lib, ent); nil != rc {
+
+							}
+						}
+					}
+
 				default:
+
 					break DRAIN
 				}
 			}
