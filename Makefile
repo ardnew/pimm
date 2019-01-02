@@ -24,9 +24,9 @@ buildtime = $(shell date -u '+%FT%TZ')
 
 # -- go flags (see: go help build) ---------------------------------------------
 
+# run with e.g. `make install USER_GOFLAGS="-race"` to enable the race detector.
 goflags-release =
-#goflags         = -race
-goflags         =
+goflags         = $(USER_GOFLAGS)
 
 # -- compiler flags (see: go tool compile -help) -------------------------------
 

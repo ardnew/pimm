@@ -39,9 +39,6 @@ type Library struct {
 	busyState *BusyState // the global busy state
 	layout    *Layout    // the primary tview interface
 
-	newMedia   chan *Discovery // media discovery
-	newSupport chan *Discovery // support file discovery
-
 	loadComplete chan interface{} // synchronization lock
 	loadStart    chan time.Time   // counting semaphore to limit number of concurrent loaders
 	loadElapsed  time.Duration    // measures time elapsed for load to complete (use internally, not thread-safe!)
@@ -97,7 +94,7 @@ const (
 // moment in time in which it was discovered.
 type Discovery struct {
 	time time.Time
-	data []interface{}
+	data []interface{} // 0 = object, 1 = db ID
 }
 
 // function newDiscovery() constructs a new instance of a Discovery struct
@@ -179,10 +176,6 @@ func newLibrary(opt *Options, busy *BusyState, lib string, lim uint, curr []*Lib
 
 		busyState: busy,
 		layout:    nil,
-
-		// channels for communicating scanner data to the main thread.
-		newMedia:   make(chan *Discovery, opt.DiscoveryBufferSize.int),
-		newSupport: make(chan *Discovery, opt.DiscoveryBufferSize.int),
 
 		loadComplete: make(chan interface{}),
 		loadStart:    make(chan time.Time, maxLibraryScanners),

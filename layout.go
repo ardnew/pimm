@@ -19,9 +19,11 @@ import (
 
 	"bytes"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 const (
@@ -36,6 +38,7 @@ var (
 
 var (
 	colorScheme = struct {
+		backgroundColor  tcell.Color
 		inactiveText     tcell.Color
 		activeText       tcell.Color
 		inactiveMenuText tcell.Color
@@ -46,7 +49,9 @@ var (
 		statusText       tcell.Color
 		statusIndicator  tcell.Color
 		identityText     tcell.Color
+		highlightText    tcell.Color
 	}{
+		backgroundColor:  tcell.ColorBlack,
 		inactiveText:     tcell.ColorDarkSlateGray,
 		activeText:       tcell.ColorWhiteSmoke,
 		inactiveMenuText: tcell.ColorSkyblue,
@@ -57,8 +62,17 @@ var (
 		statusText:       tcell.ColorGreenYellow,
 		statusIndicator:  tcell.ColorDarkOrange,
 		identityText:     tcell.ColorGreenYellow,
+		highlightText:    tcell.ColorMidnightBlue,
 	}
 )
+
+func init() {
+
+	// color overrides for the primitives initialized by tview
+	tview.Styles.ContrastBackgroundColor = colorScheme.statusIndicator
+	tview.Styles.BorderColor = colorScheme.activeText
+	tview.Styles.PrimaryTextColor = colorScheme.activeText
+}
 
 // type BusyState keeps track of the number of goroutines that are wishing to
 // indicate to the UI that they are active or busy, that the user should hold
@@ -384,6 +398,12 @@ func (l *Layout) shouldDelegateInputEvent(event *tcell.EventKey) bool {
 // event handlers such as for cycling focus among the available views.
 func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 
+	focusWidget := map[rune]FocusDelegator{
+		'L': l.libSelect,
+		'H': l.helpInfo,
+		'V': l.logView,
+	}
+
 	fwdEvent := event
 
 	l.focusLock.Lock()
@@ -407,20 +427,13 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 	}
 
 	navigationEvent := func(lo *Layout, ek tcell.Key, er rune, em tcell.ModMask, et time.Time) bool {
+
 		switch ek {
 		case tcell.KeyRune:
-			switch er {
-			case 'l', 'L':
-				lo.focusQueue <- lo.libSelect
-				return true
-			case 'h', 'H':
-				lo.focusQueue <- lo.helpInfo
-				return true
-			case 'v', 'V':
-				lo.focusQueue <- lo.logView
+			if widget, ok := focusWidget[unicode.ToUpper(er)]; ok {
+				lo.focusQueue <- widget
 				return true
 			}
-
 			// TODO: remove me, exists only for eval of color palettes
 			if fn, ok := logColors[er]; ok {
 				fn()
@@ -570,52 +583,65 @@ func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, hei
 	return 0, 0, 0, 0
 }
 
-var mediaOrder []string
-
 func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
 
-	mediaOrder = []string{}
+	fmtPrimary := func(s string) string { return s }
+	fmtSecondary := func(s string) string { return s }
 
-	insertionIndex := func(name string) int {
+	shouldInsert := func(discoName, discoPath, currName, currPath string) bool {
 
-		if len(mediaOrder) == 0 {
-			return 0
-		}
+		// sorted by name
+		return (currName == discoName && currPath >= discoPath) || (currName >= discoName)
 
-		for i, media := range mediaOrder {
-			if media >= name {
-				return i
-			}
-		}
-		n := len(mediaOrder)
-		mediaOrder = append(mediaOrder, name)
-		return n
+		// sorted by path
+		//return (currPath == discoPath && currName >= discoName) || (currPath >= discoPath)
 	}
 
 	var name, path string
+	var add bool = true
 
 	switch disco.data[0].(type) {
 	case *AudioMedia:
 		audio := disco.data[0].(*AudioMedia)
 		name = audio.AbsName
 		path = audio.AbsPath
-		//infoLog.logf("adding audio: %+v", audio)
 	case *VideoMedia:
 		video := disco.data[0].(*VideoMedia)
 		name = video.AbsName
 		path = video.AbsPath
-		//infoLog.logf("adding video: %+v", video)
 	case *Subtitles:
 		subs := disco.data[0].(*Subtitles)
 		name = subs.AbsName
 		path = subs.AbsPath
-		//infoLog.logf("adding subtitles: %+v", subs)
+		add = false
 	}
 
-	pos := insertionIndex(name)
-	l.ui.QueueUpdate(func() {
-		l.browseView.InsertItem(pos, name, path, 0, nil)
-	})
+	if add {
+		l.ui.QueueUpdate(func() {
+			// append by default, because we did not find an item that already
+			// exists in our list which should appear after our new item we are
+			// trying to insert -- i.e. the new item is lexicographically last.
+			var position int = l.browseView.GetItemCount()
+			if numItems := position; numItems > 0 {
+				for i := 0; i < numItems; i++ {
+
+					itemName, itemPath := l.browseView.GetItemText(i)
+
+					insert := shouldInsert(
+						strings.ToUpper(name),
+						strings.ToUpper(path),
+						strings.ToUpper(itemName),
+						strings.ToUpper(itemPath))
+
+					if insert {
+						position = i
+						break
+					}
+				}
+			}
+			l.browseView.InsertItem(position, fmtPrimary(name), fmtSecondary(path), 0, nil)
+		})
+	}
 
 	return nil
 }
@@ -716,7 +742,7 @@ func newHelpInfoView(ui *tview.Application, page string) *HelpInfoView {
 
 	v := HelpInfoView{view, nil, page, nil, nil}
 
-	view.SetDrawFunc(v.drawHelpInfoView)
+	v.SetDrawFunc(v.drawHelpInfoView)
 
 	return &v
 }
@@ -810,14 +836,15 @@ type BrowseView struct {
 func newBrowseView(ui *tview.Application, page string) *BrowseView {
 
 	list := tview.NewList().
-		SetSelectedFocusOnly(false)
-		//AddItem("List item 1", "Some explanatory text", 0, nil).
-		//AddItem("List item 2", "Some explanatory text", 0, nil).
-		//AddItem("List item 3", "Some explanatory text", 0, nil).
-		//AddItem("List item 4", "Some explanatory text", 0, nil).
-		//AddItem("Quit", "Press to exit", 0, func() {})
+		SetSelectedFocusOnly(false).
+		SetMainTextColor(colorScheme.activeText).
+		SetSecondaryTextColor(colorScheme.inactiveText).
+		SetSelectedBackgroundColor(colorScheme.activeMenuText).
+		SetSelectedTextColor(colorScheme.highlightText)
 
 	v := BrowseView{list, nil, page, nil, nil}
+
+	v.SetSelectedFunc(v.selectItem)
 
 	return &v
 }
@@ -832,15 +859,14 @@ func (v *BrowseView) page() string         { return v.focusPage }
 func (v *BrowseView) next() FocusDelegator { return v.focusNext }
 func (v *BrowseView) prev() FocusDelegator { return v.focusPrev }
 func (v *BrowseView) focus() {
-	//x, y, w, h := v.List.GetRect()
-	//infoLog.logf("rect = {X:%d, Y:%d}, {W:%d, H:%d}", x, y, w, h)
-	//x, y, w, h = v.layout.logView.TextView.GetRect()
-	//infoLog.logf("rect = {X:%d, Y:%d}, {W:%d, H:%d}", x, y, w, h)
 	page := v.page()
 	v.layout.pages.ShowPage(page)
 	v.layout.ui.SetFocus(v.List)
 }
 func (v *BrowseView) blur() {
+}
+func (v *BrowseView) selectItem(index int, mainText, secondaryText string, shortcut rune) {
+
 }
 
 //------------------------------------------------------------------------------

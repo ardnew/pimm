@@ -15,6 +15,8 @@ package main
 import (
 	"ardnew.com/goutil"
 
+	"bufio"
+
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -23,18 +25,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
-	"sync"
 	"time"
 )
 
 // unexported constants
 const (
-	defaultCPUProfileName      = "cpu.prof"
-	defaultMEMProfileName      = "mem.prof"
-	defaultConfigPath          = "config"
-	defaultLibDataPath         = "library.db"
-	defaultDiscoveryInterval   = "500ms"
-	defaultDiscoveryBufferSize = 4096
+	defaultCPUProfileName = "cpu.prof"
+	defaultMEMProfileName = "mem.prof"
+	defaultConfigPath     = "config"
+	defaultLibDataPath    = "library.db"
 )
 
 // versioning information defined by compiler switches in Makefile.
@@ -89,12 +88,10 @@ type Options struct {
 	Config    *Option // defines path to config file
 	LibData   *Option // defines data directory path (where to store databases)
 	CLIMode   *Option // defines the type of UI to use: CLI or TUI
+	LogPath   *Option // file path where to write all log data
 
 	DiskBufferSize *Option // size (bytes) of each collection's pre-allocated buffers on disk. num buffers = num CPU cores
 	HashBufferSize *Option // size (bytes) by which each hash table will grow once individual capacity is exceeded.
-
-	DiscoveryInterval   *Option // the interval in which the checks for new files in the discovery buffer occur
-	DiscoveryBufferSize *Option // size (file count) of discovery channel buffers
 }
 
 // type TimeInterval struct contains a start and end time (together with a
@@ -181,6 +178,21 @@ func main() {
 		panic(err)
 	}
 
+	logPath, isLogPathProvided := options.Provided[options.LogPath.name]
+	if isLogPathProvided {
+		of, err := os.Create(logPath.string)
+		if err != nil {
+			panic(rcInvalidPath.specf("could not create log file: %s", err))
+		}
+		defer func() {
+			if err := of.Close(); err != nil {
+				panic(rcInvalidPath.specf("could not close log file: %s", err))
+			}
+		}()
+		ow := bufio.NewWriter(of)
+		setWriterAll(ow)
+	}
+
 	// create the CPU profiler output if requested.
 	if options.CPUProfile.bool && "" != options.CPUProfileName.string {
 		infoLog.verbosef("writing CPU profile: %q", options.CPUProfileName.string)
@@ -247,11 +259,7 @@ func main() {
 		panic(rcInvalidConfig.spec("no valid libraries provided"))
 	}
 
-	// libraries ready, spool up the library scanners.
-	var __orderedList []string = make([]string, 0)
 	scanStart := time.Now()
-	populateLibrary(options, library, &__orderedList)
-
 	go func(lib []*Library, start time.Time) {
 
 		var numFound uint = 0
@@ -265,13 +273,18 @@ func main() {
 
 	}(library, scanStart)
 
+	// libraries ready, spool up the library scanners.
+	populateLibrary(options, library)
+
 	// we don't wait for the scanning to finish. go ahead and launch the UI for
 	// progress indicators and anything else the user can get away with while
 	// the scanners/loaders work.
 	if !isCLIMode {
 		layout = newLayout(options, busyState, library...)
 		// associate the loggers with the navigable log viewer.
-		setWriterAll(layout.logView)
+		if !isLogPathProvided {
+			setWriterAll(layout.logView)
+		}
 		select {
 		case <-initComplete:
 			// if there exists something in this channel, then we have already
@@ -289,10 +302,6 @@ func main() {
 		}
 	} else {
 		<-initComplete
-	}
-
-	for i, s := range __orderedList {
-		infoLog.logf("[%d] %s", i, s)
 	}
 
 	// create the memory profiler output if requested
@@ -423,6 +432,11 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage: "disables the curses-style textual user interface, falling back to basic terminal I/O. useful when deugging.",
 			bool:  false,
 		},
+		LogPath: &Option{
+			name:   "log",
+			usage:  "file path to where all normal and verbose log messages will be redirected",
+			string: "",
+		},
 		Config: &Option{
 			name:   "config",
 			usage:  "path to config file",
@@ -443,32 +457,21 @@ func initOptions() (options *Options, err *ReturnCode) {
 			usage: "size (in bytes) by which each hash table will grow to make room once it reaches capacity\n  (NOTE: this may not be changed after the corresponding library's database has been created)",
 			int:   defaultHashBufferSize,
 		},
-		DiscoveryInterval: &Option{
-			name:   "discoveryinterval",
-			usage:  "the interval in which new files in the discovery buffers are retrieved and notified to the user or added to the UI. this option is closely related to option -discoverybuffersize and may adversely affect performance since insufficient update frequency will result in the discovery buffers filling to capacity and thus block the media scanners from continuing until the update operation empties the discovery buffer. values are specified in human-readable form (e.g., the following arguments are all valid and equivalent: \"1500ms\" = \"1.5s\" = \"1s500ms\") ",
-			string: defaultDiscoveryInterval, //"ns", "us" (or "µs"), "ms", "s", "m", "h"
-		},
-		DiscoveryBufferSize: &Option{
-			name:  "discoverybuffersize",
-			usage: "the size (in number of file references) of the file discovery buffers. once this buffer reaches capacity, the media discovery operations will halt and wait for the discovery interval (see -discoveryinterval) to elapse and empty the buffers before resuming.",
-			int:   defaultDiscoveryBufferSize,
-		},
 	}
 	knownOptions := NamedOption{
-		"cpuprofile":          options.CPUProfile,
-		"cpuprofilename":      options.CPUProfileName,
-		"memprofile":          options.MEMProfile,
-		"memprofilename":      options.MEMProfileName,
-		"help":                options.UsageHelp,
-		"verbose":             options.Verbose,
-		"trace":               options.Trace,
-		"cli":                 options.CLIMode,
-		"config":              options.Config,
-		"libdata":             options.LibData,
-		"diskbuffersize":      options.DiskBufferSize,
-		"hashbuffersize":      options.HashBufferSize,
-		"discoveryinterval":   options.DiscoveryInterval,
-		"discoverybuffersize": options.DiscoveryBufferSize,
+		"cpuprofile":     options.CPUProfile,
+		"cpuprofilename": options.CPUProfileName,
+		"memprofile":     options.MEMProfile,
+		"memprofilename": options.MEMProfileName,
+		"help":           options.UsageHelp,
+		"verbose":        options.Verbose,
+		"trace":          options.Trace,
+		"cli":            options.CLIMode,
+		"log":            options.LogPath,
+		"config":         options.Config,
+		"libdata":        options.LibData,
+		"diskbuffersize": options.DiskBufferSize,
+		"hashbuffersize": options.HashBufferSize,
 	}
 
 	// register the command line options we want to handle.
@@ -480,12 +483,11 @@ func initOptions() (options *Options, err *ReturnCode) {
 	options.BoolVar(&options.Verbose.bool, options.Verbose.name, options.Verbose.bool, options.Verbose.usage)
 	options.BoolVar(&options.Trace.bool, options.Trace.name, options.Trace.bool, options.Trace.usage)
 	options.BoolVar(&options.CLIMode.bool, options.CLIMode.name, options.CLIMode.bool, options.CLIMode.usage)
+	options.StringVar(&options.LogPath.string, options.LogPath.name, options.LogPath.string, options.LogPath.usage)
 	options.StringVar(&options.Config.string, options.Config.name, options.Config.string, options.Config.usage)
 	options.StringVar(&options.LibData.string, options.LibData.name, options.LibData.string, options.LibData.usage)
 	options.IntVar(&options.DiskBufferSize.int, options.DiskBufferSize.name, options.DiskBufferSize.int, options.DiskBufferSize.usage)
 	options.IntVar(&options.HashBufferSize.int, options.HashBufferSize.name, options.HashBufferSize.int, options.HashBufferSize.usage)
-	options.StringVar(&options.DiscoveryInterval.string, options.DiscoveryInterval.name, options.DiscoveryInterval.string, options.DiscoveryInterval.usage)
-	options.IntVar(&options.DiscoveryBufferSize.int, options.DiscoveryBufferSize.name, options.DiscoveryBufferSize.int, options.DiscoveryBufferSize.usage)
 
 	// hide the flag.flagSet's default output error message, because we will
 	// display our own.
@@ -516,17 +518,6 @@ func initOptions() (options *Options, err *ReturnCode) {
 	if options.UsageHelp.bool {
 		options.Usage()
 		parseError = rcUsage
-	}
-
-	// try parsing the user's duration options, storing the properly-typed value
-	// in the corresponding Option object's time.Duration field
-	if nil == parseError {
-		ival, err := time.ParseDuration(options.DiscoveryInterval.string)
-		if nil == err {
-			options.DiscoveryInterval.Duration = ival
-		} else {
-			panic(err)
-		}
 	}
 
 	return options, parseError
@@ -568,22 +559,15 @@ func initLibrary(options *Options, busyState *BusyState) []*Library {
 // function populateLibrary() spawns goroutines to scan each library
 // concurrently. it also spawns goroutines that listen via channels for new
 // media discovered (see function watchLibrary() for handlers).
-func populateLibrary(options *Options, library []*Library, __orderedList *[]string) {
+func populateLibrary(options *Options, library []*Library) {
 
-	// for each library, dispatch a few (3) goroutines in the following order:
-	//   1. begin listening for content on the new-media and new-directory
-	//       discovery channels, and decide what to do with them;
+	// for each library, dispatch a pair (2) goroutines in the following order:
 	//   2. dump all of the content from the library's database, verifying it
 	//       and notifying the discovery channels;
 	//   3. recursively traverse the library's filesystem, identifying which
 	//       content is valid and desirable, then notify the discovery channels
 	//       accordingly.
 	for _, lib := range library {
-
-		// 1. spool up the discovery channel polling, handling the content as it
-		//    is received -- the media is considered valid if it has reached the
-		//    channel.
-		go watchLibrary(lib, options.DiscoveryInterval.Duration, __orderedList)
 
 		// 2. pull all of the media already known to exist in the library from
 		//    the local database, verify it still exists, then notify the
@@ -596,13 +580,19 @@ func populateLibrary(options *Options, library []*Library, __orderedList *[]stri
 						// the loader identified some file in a subdirectory of
 						// the library's file system as a media file.
 						handleMedia: func(l *Library, p string, v ...interface{}) {
-							l.newMedia <- newDiscovery(v...)
+							disco := newDiscovery(v...)
+							if !isCLIMode {
+								l.layout.addDiscovery(l, disco)
+							}
 						},
 						// the loader identified some file in a subdirectory of
 						// the library's file system as a supporting auxiliary
 						// file to a known or as-of-yet unknown media file.
 						handleSupport: func(l *Library, p string, v ...interface{}) {
-							l.newSupport <- newDiscovery(v...)
+							disco := newDiscovery(v...)
+							if !isCLIMode {
+								l.layout.addDiscovery(l, disco)
+							}
 						},
 						// the loader identified some file in a subdirectory of
 						// the library's file system as an undesirable piece of
@@ -628,13 +618,19 @@ func populateLibrary(options *Options, library []*Library, __orderedList *[]stri
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as a media file.
 					handleMedia: func(l *Library, p string, v ...interface{}) {
-						l.newMedia <- newDiscovery(v...)
+						disco := newDiscovery(v...)
+						if !isCLIMode {
+							l.layout.addDiscovery(l, disco)
+						}
 					},
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as a supporting auxiliary file to a
 					// known or as-of-yet unknown media file.
 					handleSupport: func(l *Library, p string, v ...interface{}) {
-						l.newSupport <- newDiscovery(v...)
+						disco := newDiscovery(v...)
+						if !isCLIMode {
+							l.layout.addDiscovery(l, disco)
+						}
 					},
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as an undesirable piece of trash.
@@ -654,142 +650,5 @@ func populateLibrary(options *Options, library []*Library, __orderedList *[]stri
 			}
 			l.scanComplete <- numMedia
 		}(lib)
-	}
-}
-
-// function watchLibrary() is the dispatched goroutine that listens for and
-// handles new media as they are discovered. the media has been validated before
-// it is written to the channel, so you can safely assume the media here exists
-// and is desirable.
-func watchLibrary(lib *Library, ival time.Duration, __orderedList *[]string) {
-
-	var listLock sync.Mutex = sync.Mutex{}
-	var count int = 0
-
-	addItem := func(s string) {
-		*__orderedList = append(*__orderedList, s)
-	}
-	insertItem := func(i int, s string) {
-		if i >= 0 {
-			// if the i provided is greater than the number of elements in the list,
-			// just treat this like an ordinary append, using the exported AddItem()
-			if i >= len(*__orderedList) {
-				addItem(s)
-			}
-			*__orderedList = append(*__orderedList, "")
-			copy((*__orderedList)[i+1:], (*__orderedList)[i:])
-			(*__orderedList)[i] = s
-		}
-	}
-	insertIndex := func(s string) int {
-		n := len(*__orderedList)
-		if n == 0 {
-			return 0
-		}
-		for i, t := range *__orderedList {
-			if t >= s {
-				return i
-			}
-		}
-		return n
-	}
-
-	infoLog.tracef("polling discovery buffer every %s", ival)
-	// continuously monitors a library's signal channels for new content, which
-	// creates or processes the content accordingly.
-	for {
-		// TODO: relay the discovery to anyone that needs to know. the library
-		// has already finished with whatever it was doing, so the data should
-		// be fully initialized and ready to be handled.
-		select {
-		case <-time.After(ival):
-		DRAIN:
-			for {
-				// TODO: accessing lib.layout here seems very risky, because it
-				// looks to me like it is possible for one of these channels to
-				// potentially be available before layout is even created (that
-				// is -- newLayout() is called AFTER watchLibrary()). but i've
-				// yet to encounter a segfault, so maybe one of the artificual
-				// goroutine rendezvous i've created protects us... who knows!
-				// until then, knock on wood...
-
-				select {
-
-				case ent := <-lib.newMedia:
-
-					listLock.Lock()
-					count = count + 1
-					listLock.Unlock()
-
-					if isCLIMode {
-						// NOOP, nothing more to do if in CLI mode
-						var name string
-						switch ent.data[0].(type) {
-						case *AudioMedia:
-							name = ent.data[0].(*AudioMedia).AbsPath
-						case *VideoMedia:
-							name = ent.data[0].(*VideoMedia).AbsPath
-						case *Subtitles:
-							name = ent.data[0].(*Subtitles).AbsPath
-						default:
-							infoLog.logf("default case: %+v", ent)
-						}
-						name = fmt.Sprintf("\"%s\"", name)
-						pos := insertIndex(name)
-						insertItem(pos, name)
-
-						infoLog.logf("count = %d", count)
-
-					} else {
-						if nil == lib.layout {
-							panic(rcTUIError.spec("cannot add media to layout: terminal interface not ready"))
-						} else {
-							if rc := lib.layout.addDiscovery(lib, ent); nil != rc {
-
-							}
-						}
-					}
-
-				case ent := <-lib.newSupport:
-
-					listLock.Lock()
-					count = count + 1
-					listLock.Unlock()
-
-					if isCLIMode {
-						// NOOP, nothing more to do if in CLI mode
-						var name string
-						switch ent.data[0].(type) {
-						case *AudioMedia:
-							name = ent.data[0].(*AudioMedia).AbsPath
-						case *VideoMedia:
-							name = ent.data[0].(*VideoMedia).AbsPath
-						case *Subtitles:
-							name = ent.data[0].(*Subtitles).AbsPath
-						default:
-							infoLog.logf("default case: %+v", ent)
-						}
-						name = fmt.Sprintf("\"%s\"", name)
-						pos := insertIndex(name)
-						insertItem(pos, name)
-
-						infoLog.logf("count = %d", count)
-
-					} else {
-						if nil == lib.layout {
-							panic(rcTUIError.spec("cannot add support file to layout: terminal interface not ready"))
-						} else {
-							if rc := lib.layout.addDiscovery(lib, ent); nil != rc {
-
-							}
-						}
-					}
-
-				default:
-
-					break DRAIN
-				}
-			}
-		}
 	}
 }
