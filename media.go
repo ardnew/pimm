@@ -14,14 +14,14 @@
 package main
 
 import (
-	"github.com/HouzuoGuo/tiedot/db"
-	//"github.com/davecgh/go-spew/spew"
-
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/HouzuoGuo/tiedot/db"
+	//"github.com/davecgh/go-spew/spew"
 )
 
 // type MediaKind is an enum identifying the different supported types of

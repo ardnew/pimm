@@ -15,11 +15,6 @@
 package main
 
 import (
-	"ardnew.com/goutil"
-
-	"github.com/HouzuoGuo/tiedot/db"
-	//"github.com/davecgh/go-spew/spew"
-
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -29,6 +24,10 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"ardnew.com/goutil"
+	"github.com/HouzuoGuo/tiedot/db"
+	//"github.com/davecgh/go-spew/spew"
 )
 
 const (

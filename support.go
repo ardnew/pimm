@@ -14,13 +14,13 @@
 package main
 
 import (
-	"github.com/HouzuoGuo/tiedot/db"
-	//"github.com/davecgh/go-spew/spew"
-
 	"encoding/json"
 	"os"
 	"path"
 	"strings"
+
+	"github.com/HouzuoGuo/tiedot/db"
+	//"github.com/davecgh/go-spew/spew"
 )
 
 // type SupportKind is an enum identifying different types of files that support

@@ -14,9 +14,6 @@
 package main
 
 import (
-	"github.com/gdamore/tcell"
-	"github.com/rivo/tview"
-
 	"bytes"
 	"fmt"
 	"strings"
@@ -24,6 +21,9 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/gdamore/tcell"
+	"github.com/rivo/tview"
 )
 
 const (
@@ -37,39 +37,34 @@ var (
 )
 
 var (
+	// the term "interactive" is used to mean an item has a dedicated, keyboard-
+	// driven key combo, so that it behaves much like a button.
 	colorScheme = struct {
-		backgroundColor  tcell.Color
-		inactiveText     tcell.Color
-		activeText       tcell.Color
-		inactiveMenuText tcell.Color
-		activeMenuText   tcell.Color
-		inactiveBorder   tcell.Color
-		activeBorder     tcell.Color
-		clockText        tcell.Color
-		statusText       tcell.Color
-		statusIndicator  tcell.Color
-		identityText     tcell.Color
-		highlightText    tcell.Color
+		backgroundColor    tcell.Color // main background color
+		inactiveText       tcell.Color // non-interactive info, secondary or unfocused
+		activeText         tcell.Color // non-interactive info, primary or focused
+		inactiveMenuText   tcell.Color // unselected interactive text
+		activeMenuText     tcell.Color // selected interactive text
+		activeBorder       tcell.Color // border of active/modal views
+		highlightPrimary   tcell.Color // active selections and prominent indicators
+		highlightSecondary tcell.Color // dynamic persistent status info
+		highlightTertiary  tcell.Color // dynamic temporary status info
 	}{
-		backgroundColor:  tcell.ColorBlack,
-		inactiveText:     tcell.ColorDarkSlateGray,
-		activeText:       tcell.ColorWhiteSmoke,
-		inactiveMenuText: tcell.ColorSkyblue,
-		activeMenuText:   tcell.ColorDodgerBlue,
-		inactiveBorder:   tcell.ColorWhite,
-		activeBorder:     tcell.ColorSkyblue,
-		clockText:        tcell.ColorDodgerBlue,
-		statusText:       tcell.ColorGreenYellow,
-		statusIndicator:  tcell.ColorDarkOrange,
-		identityText:     tcell.ColorGreenYellow,
-		highlightText:    tcell.ColorMidnightBlue,
+		backgroundColor:    tcell.ColorBlack,
+		inactiveText:       tcell.ColorDarkSlateGray,
+		activeText:         tcell.ColorWhiteSmoke,
+		inactiveMenuText:   tcell.ColorSkyblue,
+		activeMenuText:     tcell.ColorDodgerBlue,
+		activeBorder:       tcell.ColorSkyblue,
+		highlightPrimary:   tcell.ColorDarkOrange,
+		highlightSecondary: tcell.ColorDodgerBlue,
+		highlightTertiary:  tcell.ColorGreenYellow,
 	}
 )
 
 func init() {
-
 	// color overrides for the primitives initialized by tview
-	tview.Styles.ContrastBackgroundColor = colorScheme.statusIndicator
+	tview.Styles.ContrastBackgroundColor = colorScheme.highlightPrimary
 	tview.Styles.BorderColor = colorScheme.activeText
 	tview.Styles.PrimaryTextColor = colorScheme.activeText
 }
@@ -308,8 +303,7 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		AddItem(footer /******/, 3, 0, 1, 3, 0, 0, false)
 
 	root. // other options for the primary layout grid
-		SetBorders(true).
-		SetBorderColor(colorScheme.inactiveBorder)
+		SetBorders(true)
 
 	quitModal := newQuitDialog(ui, "quitModal")
 	libSelect := newLibSelectView(ui, "libSelect")
@@ -561,7 +555,7 @@ func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, hei
 	dateTime := time.Now().Format("2006/01/02 15:04:05")
 
 	// Write some text along the horizontal line.
-	tview.Print(screen, dateTime, x+3, y, width, tview.AlignLeft, colorScheme.clockText)
+	tview.Print(screen, dateTime, x+3, y, width, tview.AlignLeft, colorScheme.highlightSecondary)
 
 	// update the busy indicator if we have any active worker threads
 	count := l.busy.count()
@@ -572,11 +566,11 @@ func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, hei
 		// draw the "working..." indicator. note the +2 is to make room for the
 		// moon rune following this indicator.
 		working := fmt.Sprintf("working%-*s", ellipses, bytes.Repeat([]byte{'.'}, cycle%ellipses))
-		tview.Print(screen, working, x-ellipses+1, y, width, tview.AlignRight, colorScheme.statusText)
+		tview.Print(screen, working, x-ellipses+1, y, width, tview.AlignRight, colorScheme.highlightTertiary)
 
 		// draw the cyclic moon rotation
 		moon := fmt.Sprintf("%c ", MoonPhase[cycle%MoonPhaseLength])
-		tview.Print(screen, moon, x, y, width, tview.AlignRight, colorScheme.statusIndicator)
+		tview.Print(screen, moon, x, y, width, tview.AlignRight, colorScheme.highlightPrimary)
 	}
 
 	// Coordinate space for subsequent draws.
@@ -639,7 +633,7 @@ func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
 					}
 				}
 			}
-			l.browseView.InsertItem(position, fmtPrimary(name), fmtSecondary(path), 0, nil)
+			l.browseView.InsertItem(position, fmtPrimary(name), fmtSecondary(path), nil)
 		})
 	}
 
@@ -666,13 +660,6 @@ func newQuitDialog(ui *tview.Application, page string) *QuitDialog {
 	view := tview.NewModal().
 		SetText(prompt).
 		AddButtons(button)
-
-	view.
-		SetBorder(true).
-		SetBorderColor(colorScheme.activeBorder).
-		SetTitle(" Quit ").
-		SetTitleColor(colorScheme.activeMenuText).
-		SetTitleAlign(tview.AlignRight)
 
 	v := QuitDialog{view, nil, page, nil, nil}
 
@@ -705,15 +692,6 @@ func (v *QuitDialog) focus() {
 func (v *QuitDialog) blur() {
 	page := v.page()
 	v.layout.pages.HidePage(page)
-}
-func (v *QuitDialog) drawQuitDialog(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
-
-	swvers := fmt.Sprintf(" %s v%s (%s) ", identity, version, revision)
-
-	tview.Print(screen, swvers, x+1, y, width-2, tview.AlignLeft, colorScheme.identityText)
-
-	// Coordinate space for subsequent draws.
-	return 0, 0, 0, 0
 }
 
 //------------------------------------------------------------------------------
@@ -768,7 +746,7 @@ func (v *HelpInfoView) drawHelpInfoView(screen tcell.Screen, x int, y int, width
 
 	swvers := fmt.Sprintf(" %s v%s (%s) ", identity, version, revision)
 
-	tview.Print(screen, swvers, x+1, y, width-2, tview.AlignLeft, colorScheme.identityText)
+	tview.Print(screen, swvers, x+1, y, width-2, tview.AlignLeft, colorScheme.highlightPrimary)
 
 	// Coordinate space for subsequent draws.
 	return 0, 0, 0, 0
@@ -824,7 +802,7 @@ func (v *LibSelectView) blur() {
 //------------------------------------------------------------------------------
 
 type BrowseView struct {
-	*tview.List
+	*Browser
 	layout    *Layout
 	focusPage string
 	focusNext FocusDelegator
@@ -835,12 +813,7 @@ type BrowseView struct {
 // where all of the currently available media can be browsed.
 func newBrowseView(ui *tview.Application, page string) *BrowseView {
 
-	list := tview.NewList().
-		SetSelectedFocusOnly(false).
-		SetMainTextColor(colorScheme.activeText).
-		SetSecondaryTextColor(colorScheme.inactiveText).
-		SetSelectedBackgroundColor(colorScheme.activeMenuText).
-		SetSelectedTextColor(colorScheme.highlightText)
+	list := NewBrowser().SetSelectedFocusOnly(false)
 
 	v := BrowseView{list, nil, page, nil, nil}
 
@@ -861,11 +834,11 @@ func (v *BrowseView) prev() FocusDelegator { return v.focusPrev }
 func (v *BrowseView) focus() {
 	page := v.page()
 	v.layout.pages.ShowPage(page)
-	v.layout.ui.SetFocus(v.List)
+	v.layout.ui.SetFocus(v.Browser)
 }
 func (v *BrowseView) blur() {
 }
-func (v *BrowseView) selectItem(index int, mainText, secondaryText string, shortcut rune) {
+func (v *BrowseView) selectItem(index int, mainText, secondaryText string) {
 
 }
 

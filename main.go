@@ -13,10 +13,7 @@
 package main
 
 import (
-	"ardnew.com/goutil"
-
 	"bufio"
-
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -26,6 +23,8 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"time"
+
+	"ardnew.com/goutil"
 )
 
 // unexported constants

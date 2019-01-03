@@ -14,14 +14,14 @@
 package main
 
 import (
-	"github.com/HouzuoGuo/tiedot/db"
-	//"github.com/davecgh/go-spew/spew"
-
 	"fmt"
 	"os"
 	"path"
 	"strings"
 	"time"
+
+	"github.com/HouzuoGuo/tiedot/db"
+	//"github.com/davecgh/go-spew/spew"
 )
 
 // type EntityClass is an enum identifying the different types of file entities

@@ -14,14 +14,14 @@
 package main
 
 import (
-	"github.com/HouzuoGuo/tiedot/db"
-	//"github.com/davecgh/go-spew/spew"
-
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"time"
+
+	"github.com/HouzuoGuo/tiedot/db"
+	//"github.com/davecgh/go-spew/spew"
 )
 
 // type Library represents a collection of a specified kind of media files
