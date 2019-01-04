@@ -40,31 +40,36 @@ var (
 	// the term "interactive" is used to mean an item has a dedicated, keyboard-
 	// driven key combo, so that it behaves much like a button.
 	colorScheme = struct {
-		backgroundColor    tcell.Color // main background color
-		inactiveText       tcell.Color // non-interactive info, secondary or unfocused
-		activeText         tcell.Color // non-interactive info, primary or focused
-		inactiveMenuText   tcell.Color // unselected interactive text
-		activeMenuText     tcell.Color // selected interactive text
-		activeBorder       tcell.Color // border of active/modal views
-		highlightPrimary   tcell.Color // active selections and prominent indicators
-		highlightSecondary tcell.Color // dynamic persistent status info
-		highlightTertiary  tcell.Color // dynamic temporary status info
+		backgroundPrimary   tcell.Color // main background color
+		backgroundSecondary tcell.Color // background color of modal windows
+		backgroundTertiary  tcell.Color // background of dropdown menus, etc.
+		inactiveText        tcell.Color // non-interactive info, secondary or unfocused
+		activeText          tcell.Color // non-interactive info, primary or focused
+		inactiveMenuText    tcell.Color // unselected interactive text
+		activeMenuText      tcell.Color // selected interactive text
+		activeBorder        tcell.Color // border of active/modal views
+		highlightPrimary    tcell.Color // active selections and prominent indicators
+		highlightSecondary  tcell.Color // dynamic persistent status info
+		highlightTertiary   tcell.Color // dynamic temporary status info
 	}{
-		backgroundColor:    tcell.ColorBlack,
-		inactiveText:       tcell.ColorDarkSlateGray,
-		activeText:         tcell.ColorWhiteSmoke,
-		inactiveMenuText:   tcell.ColorSkyblue,
-		activeMenuText:     tcell.ColorDodgerBlue,
-		activeBorder:       tcell.ColorSkyblue,
-		highlightPrimary:   tcell.ColorDarkOrange,
-		highlightSecondary: tcell.ColorDodgerBlue,
-		highlightTertiary:  tcell.ColorGreenYellow,
+		backgroundPrimary:   tcell.ColorBlack,
+		backgroundSecondary: tcell.ColorDarkSlateGray,
+		backgroundTertiary:  tcell.ColorSkyblue,
+		inactiveText:        tcell.ColorDarkSlateGray,
+		activeText:          tcell.ColorWhiteSmoke,
+		inactiveMenuText:    tcell.ColorSkyblue,
+		activeMenuText:      tcell.ColorDodgerBlue,
+		activeBorder:        tcell.ColorSkyblue,
+		highlightPrimary:    tcell.ColorDarkOrange,
+		highlightSecondary:  tcell.ColorDodgerBlue,
+		highlightTertiary:   tcell.ColorGreenYellow,
 	}
 )
 
 func init() {
 	// color overrides for the primitives initialized by tview
-	tview.Styles.ContrastBackgroundColor = colorScheme.highlightPrimary
+	tview.Styles.ContrastBackgroundColor = colorScheme.backgroundSecondary
+	tview.Styles.MoreContrastBackgroundColor = colorScheme.backgroundTertiary
 	tview.Styles.BorderColor = colorScheme.activeText
 	tview.Styles.PrimaryTextColor = colorScheme.activeText
 }
@@ -156,6 +161,7 @@ type FocusDelegator interface {
 type Layout struct {
 	ui     *tview.Application
 	option *Options
+	lib    []*Library
 	busy   *BusyState
 
 	pages     *tview.Pages
@@ -174,9 +180,9 @@ type Layout struct {
 	focusBase  FocusDelegator
 	focused    FocusDelegator
 
-	// NOTE: this screen var won't get set until one of the draw routines which
-	// uses it is called, so be careful when accessing it -- make sure it's
-	// actually available.
+	// NOTE: this vars below won't get set until one of the draw routines which
+	// uses a tcell.Screen is called, so be careful when accessing them -- make
+	// sure they're actually available.
 	screen *tcell.Screen
 }
 
@@ -283,8 +289,8 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 	header := tview.NewBox().
 		SetBorder(false)
 
-	browseView := newBrowseView(ui, "root")
-	logView := newLogView(ui, "root")
+	browseView := newBrowseView(ui, "root", lib)
+	logView := newLogView(ui, "root", lib)
 
 	footer := tview.NewBox().
 		SetBorder(false)
@@ -305,9 +311,9 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 	root. // other options for the primary layout grid
 		SetBorders(true)
 
-	quitModal := newQuitDialog(ui, "quitModal")
-	libSelect := newLibSelectView(ui, "libSelect")
-	helpInfo := newHelpInfoView(ui, "helpInfo")
+	quitModal := newQuitDialog(ui, "quitModal", lib)
+	libSelect := newLibSelectView(ui, "libSelect", lib)
+	helpInfo := newHelpInfoView(ui, "helpInfo", lib)
 
 	pages := tview.NewPages().
 		AddPage("root", root, true, true).
@@ -332,6 +338,7 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 	layout = Layout{
 		ui:     ui,
 		option: opt,
+		lib:    lib,
 		busy:   busy,
 
 		pages:     pages,
@@ -466,9 +473,6 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 		case tcell.KeyEsc:
 			l.focusQueue <- l.focusBase
 		}
-		if exitEvent(l, evKey, evRune, evMod, evTime) {
-			l.focusQueue <- l.quitModal
-		}
 
 	case *BrowseView:
 		if !navigationEvent(l, evKey, evRune, evMod, evTime) {
@@ -507,7 +511,7 @@ func (l *Layout) drawMenuBar(screen tcell.Screen, x int, y int, width int, heigh
 
 	const (
 		libDimWidth   = 40 // library selection window width
-		libDimHeight  = 10 // ^----------------------- height
+		libDimHeight  = 20 // ^----------------------- height
 		helpDimWidth  = 40 // help info window width
 		helpDimHeight = 10 // ^--------------- height
 	)
@@ -525,7 +529,8 @@ func (l *Layout) drawMenuBar(screen tcell.Screen, x int, y int, width int, heigh
 	l.helpInfo.
 		SetRect(width-helpDimWidth, 1, helpDimWidth, helpDimHeight)
 
-	library := fmt.Sprintf("[::bu]%s[::-]%s:", "L", "ibrary")
+	libName := l.libSelect.selectedName
+	library := fmt.Sprintf("[::bu]%s[::-]%s: [#%06x]%s", "L", "ibrary", colorScheme.highlightPrimary.Hex(), libName)
 	help := fmt.Sprintf("[::bu]%s[::-]%s", "H", "elp")
 
 	tview.Print(screen, library, x+3, y, width, tview.AlignLeft, colorScheme.inactiveMenuText)
@@ -652,7 +657,7 @@ type QuitDialog struct {
 
 // function newQuitDialog() allocates and initializes the tview.Modal widget
 // that prompts the user to confirm before quitting the application.
-func newQuitDialog(ui *tview.Application, page string) *QuitDialog {
+func newQuitDialog(ui *tview.Application, page string, lib []*Library) *QuitDialog {
 
 	prompt := "Oh, so you're a quitter, huh?"
 	button := []string{"Y-yeah...", " Fuck NO "}
@@ -707,20 +712,23 @@ type HelpInfoView struct {
 // function newHelpInfoView() allocates and initializes the tview.Form widget
 // where the user selects which library to browse and any other filtering
 // options.
-func newHelpInfoView(ui *tview.Application, page string) *HelpInfoView {
+func newHelpInfoView(ui *tview.Application, page string, lib []*Library) *HelpInfoView {
 
-	view := tview.NewBox()
+	v := HelpInfoView{nil, nil, page, nil, nil}
 
-	view.
+	help := tview.NewBox()
+
+	help.
 		SetBorder(true).
 		SetBorderColor(colorScheme.activeBorder).
 		SetTitle(" Help ").
 		SetTitleColor(colorScheme.activeMenuText).
 		SetTitleAlign(tview.AlignRight)
 
-	v := HelpInfoView{view, nil, page, nil, nil}
+	help.
+		SetDrawFunc(v.drawHelpInfoView)
 
-	v.SetDrawFunc(v.drawHelpInfoView)
+	v.Box = help
 
 	return &v
 }
@@ -754,29 +762,79 @@ func (v *HelpInfoView) drawHelpInfoView(screen tcell.Screen, x int, y int, width
 
 //------------------------------------------------------------------------------
 
+type LibSelectViewFormItem int
+
+const (
+	lsiLibrary LibSelectViewFormItem = iota
+)
+
+// the index used to indicate -all- libraries selected for viewing.
+const selectedLibraryAll = 0
+const selectedLibraryAllOption = "(All)"
+
 type LibSelectView struct {
 	*tview.Form
 	layout    *Layout
 	focusPage string
 	focusNext FocusDelegator
 	focusPrev FocusDelegator
+
+	library         []*Library
+	selectedLibrary int
+	selectedName    string
 }
 
 // function newLibSelectView() allocates and initializes the tview.Form widget
 // where the user selects which library to browse and any other filtering
 // options.
-func newLibSelectView(ui *tview.Application, page string) *LibSelectView {
+func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSelectView {
 
-	view := tview.NewForm()
+	libName := []string{selectedLibraryAllOption}
+	dropDownWidth := len(selectedLibraryAllOption)
+	for _, l := range lib {
+		if n := len(l.name); n > dropDownWidth {
+			dropDownWidth = n
+		}
+		libName = append(libName, l.name)
+	}
 
-	view.
+	for i, name := range libName {
+		libName[i] = fmt.Sprintf(" %-*s", dropDownWidth+3, name)
+	}
+
+	// offset library by 1 so that the "all" item is at index 0.
+	xref := make([]*Library, len(lib)+1)
+	copy(xref[1:], lib)
+
+	v :=
+		LibSelectView{
+			Form:            nil,
+			layout:          nil,
+			focusPage:       page,
+			focusNext:       nil,
+			focusPrev:       nil,
+			library:         xref,
+			selectedLibrary: selectedLibraryAll,
+		}
+
+	form := tview.NewForm().
+		AddDropDown("Show", libName, 0, v.selectedLibDropDown).
+		AddInputField("Blah", "foobar", 0, nil, nil).
+		AddInputField("What", "hahahahahaha", 0, nil, nil).
+		SetLabelColor(colorScheme.activeText).
+		SetFieldTextColor(colorScheme.inactiveMenuText).
+		SetFieldBackgroundColor(colorScheme.backgroundSecondary)
+
+	form.
 		SetBorder(true).
 		SetBorderColor(colorScheme.activeBorder).
-		SetTitle(" Library ").
 		SetTitleColor(colorScheme.activeMenuText).
-		SetTitleAlign(tview.AlignLeft)
+		SetTitleAlign(tview.AlignLeft).
+		SetDrawFunc(v.drawLibSelectView)
 
-	v := LibSelectView{view, nil, page, nil, nil}
+	v.Form = form
+
+	v.selectedLibDropDown(selectedLibraryAllOption, selectedLibraryAll)
 
 	return &v
 }
@@ -798,6 +856,29 @@ func (v *LibSelectView) blur() {
 	page := v.page()
 	v.layout.pages.HidePage(page)
 }
+func (v *LibSelectView) drawLibSelectView(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
+
+	// Coordinate space for subsequent draws.
+	return v.Form.GetInnerRect()
+}
+func (v *LibSelectView) selectedLibDropDown(option string, optionIndex int) {
+
+	v.selectedLibrary = optionIndex
+	lib := v.library[v.selectedLibrary]
+
+	if nil != lib {
+		v.selectedName = strings.TrimSpace(lib.name)
+	} else {
+		v.selectedName = strings.TrimSpace(option)
+	}
+
+	v.SetTitle(fmt.Sprintf(" Library: [#%06x]%s ", colorScheme.highlightPrimary.Hex(), v.selectedName))
+
+	switch v.selectedLibrary {
+	case selectedLibraryAll:
+	default:
+	}
+}
 
 //------------------------------------------------------------------------------
 
@@ -811,9 +892,9 @@ type BrowseView struct {
 
 // function newBrowseView() allocates and initializes the tview.List widget
 // where all of the currently available media can be browsed.
-func newBrowseView(ui *tview.Application, page string) *BrowseView {
+func newBrowseView(ui *tview.Application, page string, lib []*Library) *BrowseView {
 
-	list := NewBrowser().SetSelectedFocusOnly(false)
+	list := NewBrowser()
 
 	v := BrowseView{list, nil, page, nil, nil}
 
@@ -854,7 +935,7 @@ type LogView struct {
 
 // function newLogView() allocates and initializes the tview.TextView widget
 // where all runtime log data is navigated by and displayed to the user.
-func newLogView(ui *tview.Application, page string) *LogView {
+func newLogView(ui *tview.Application, page string, lib []*Library) *LogView {
 
 	logChanged := func() { ui.QueueUpdateDraw(func() {}) }
 	logDone := func(key tcell.Key) {}

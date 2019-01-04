@@ -76,7 +76,7 @@ func NewBrowser() *Browser {
 		showSecondaryText:       true,
 		mainTextColor:           colorScheme.activeText,
 		secondaryTextColor:      colorScheme.inactiveText,
-		selectedTextColor:       colorScheme.activeText,
+		selectedTextColor:       colorScheme.backgroundPrimary,
 		selectedBackgroundColor: colorScheme.highlightPrimary,
 	}
 }
