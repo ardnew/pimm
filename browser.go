@@ -21,17 +21,74 @@ import (
 
 // mediaItem represents one item in a Browser.
 type mediaItem struct {
+	*Media
+	SourceLibrary *Library
+	Owner         *Browser
 	MainText      string // The main text of the list item.
 	SecondaryText string // A secondary text to be shown underneath the main text.
 	Selected      func() // The optional function which is called when the item is selected.
+}
+
+func (l *mediaItem) HideItem() *mediaItem {
+
+	// find our current item in the list of hidden items.
+	hiddenIndex := -1
+	for i, m := range l.Owner.hiddenItem {
+		if m == l {
+			hiddenIndex = i
+			break
+		}
+	}
+	// append it to the hidden items list if it doesn't exist there already.
+	if hiddenIndex < 0 {
+		l.Owner.hiddenItem = append(l.Owner.hiddenItem, l)
+
+		visibleIndex := -1
+		for i, m := range l.Owner.visibleItem {
+			if m == l {
+				visibleIndex = i
+				break
+			}
+		}
+
+		// and finally remove it from the list of visible items.
+		if visibleIndex >= 0 && visibleIndex < len(l.Owner.visibleItem) {
+			l.Owner.RemoveItem(visibleIndex)
+		}
+	}
+	return l
+}
+
+func (l *mediaItem) ShowItem() *mediaItem {
+	// find our current item in the list of hidden items.
+	hiddenIndex := -1
+	for i, m := range l.Owner.hiddenItem {
+		if m == l {
+			hiddenIndex = i
+			break
+		}
+	}
+	// remove the item by appending the items trailing our hidden index to the
+	// items preceding it.
+	if hiddenIndex >= 0 {
+		l.Owner.hiddenItem =
+			append(l.Owner.hiddenItem[:hiddenIndex], l.Owner.hiddenItem[hiddenIndex+1:]...)
+		position := l.SourceLibrary.layout.insertPosition(l.Media.AbsName, l.Media.AbsPath)
+		l.Owner.InsertMediaItem(l.SourceLibrary, l.Media, position, l.MainText, l.SecondaryText, l.Selected)
+	}
+
+	return l
 }
 
 // Browser displays rows of items, each of which can be selected.
 type Browser struct {
 	*tview.Box
 
-	// The items of the list.
-	items []*mediaItem
+	// The visible items of the list.
+	visibleItem []*mediaItem
+
+	// The hidden items of the list.
+	hiddenItem []*mediaItem
 
 	// The index of the currently selected item.
 	currentItem int
@@ -73,6 +130,7 @@ type Browser struct {
 func NewBrowser() *Browser {
 	return &Browser{
 		Box:                     tview.NewBox(),
+		hiddenItem:              make([]*mediaItem, 0),
 		showSecondaryText:       true,
 		mainTextColor:           colorScheme.activeText,
 		secondaryTextColor:      colorScheme.inactiveText,
@@ -85,8 +143,8 @@ func NewBrowser() *Browser {
 // a "changed" event.
 func (l *Browser) SetCurrentItem(index int) *Browser {
 	l.currentItem = index
-	if l.currentItem < len(l.items) && l.changed != nil {
-		item := l.items[l.currentItem]
+	if l.currentItem < len(l.visibleItem) && l.changed != nil {
+		item := l.visibleItem[l.currentItem]
 		l.changed(l.currentItem, item.MainText, item.SecondaryText)
 	}
 	return l
@@ -98,24 +156,91 @@ func (l *Browser) GetCurrentItem() int {
 }
 
 // RemoveItem removes the item with the given index (starting at 0) from the
-// list. Does nothing if the index is out of range.
+// list. Does nothing if the index is out of range. This triggers a "changed"
+// event if and only if the currently selected item is changed because of the
+// removal.
 func (l *Browser) RemoveItem(index int) *Browser {
-	if index < 0 || index >= len(l.items) {
+	if index < 0 || index >= len(l.visibleItem) {
 		return l
 	}
-	l.items = append(l.items[:index], l.items[index+1:]...)
-	if l.currentItem >= len(l.items) {
-		l.currentItem = len(l.items) - 1
-	}
-	// TODO:
-	//   maybe decrement currentItem if it equals the removal index so that it
-	//   shifts down along with the subsequent items? which behavior feels more
-	//   natural, intuitive?
-	if l.currentItem < len(l.items) && l.changed != nil {
-		item := l.items[l.currentItem]
-		l.changed(l.currentItem, item.MainText, item.SecondaryText)
+	l.visibleItem = append(l.visibleItem[:index], l.visibleItem[index+1:]...)
+
+	// calculate the new length after removal of the item (this should probably
+	// always be the previous length - 1, obviously, I think...)
+	length := len(l.visibleItem)
+
+	// determine if we should trigger the "changed" event by determining if our
+	// currently selected item is outside the range of the list after item
+	// removal (and the resulting list is non-empty) or if the item removed is
+	// the currently selected item. in either case, the currently selected item
+	// must be changed.
+	changeCurrentItem :=
+		(l.currentItem >= length && length > 0) || (l.currentItem == index)
+
+	// if we've determined the currently selected item should be changed, then
+	// perform the change (clamped to list length as upper bound) and trigger
+	// a "changed" event.
+	if changeCurrentItem {
+		l.currentItem--
+		if l.currentItem >= length {
+			l.currentItem = length - 1
+		}
+		if nil != l.changed {
+			item := l.visibleItem[l.currentItem]
+			l.changed(l.currentItem, item.MainText, item.SecondaryText)
+		}
 	}
 	return l
+}
+
+func (l *Browser) ShowLibrary(library *Library) {
+
+	infoLog.logf("ShowLibrary = %+v", library)
+
+	allItems := []*mediaItem{}
+	allItems = append(allItems, l.hiddenItem...)
+	allItems = append(allItems, l.visibleItem...)
+
+	if nil == library {
+		//for _, m := range l.hiddenItem {
+		for _, m := range allItems {
+			//infoLog.logf("\tshow: %+v", m)
+			m.ShowItem()
+		}
+	} else {
+		//
+		// walk backward over the list so that we do not skip an item when the
+		// list items are shifted due to a removal. for example, with items to
+		// be removed enclosed in curly braces, a forward traversal would result
+		// in the following iterations and resulting list:
+		//
+		//  iter#:  list[]                       description
+		//  ------  ---------------------------  -------------------------------
+		//          [  A , {B}, {C},  D ,  E  ]
+		//      0:     ^                         first item "A" left as-is, not a candidate for removal
+		//          [  A , {B}, {C},  D ,  E  ]
+		//      1:          ^                    next item "B" removed, shift trailing items to the left
+		//          [  A , {C},  D ,  E       ]
+		//      2:               ^               next item "D" left as-is, not a candidate for removal
+		//          [  A , {C},  D ,  E       ]
+		//      3:                    ^          last item "E" left as-is, not a candidate for removal, terminate loop
+		//
+		// so in this example, item "C" originally at list index 2 is skipped
+		// during a forward traversal and remains at list index 1 once the
+		// traversal finishes. traversing the list from the opposite direction
+		// prevents not-yet-examined items from being moved to positions that
+		// have already been evaluated.
+		//
+		for i := len(allItems) - 1; i >= 0; i-- {
+			m := allItems[i]
+			if m.SourceLibrary != library {
+				//infoLog.logf("\thide: %+v", m)
+				m.HideItem()
+			} else {
+				m.ShowItem()
+			}
+		}
+	}
 }
 
 // SetMainTextColor sets the color of the items' main text.
@@ -183,28 +308,32 @@ func (l *Browser) SetDoneFunc(handler func()) *Browser {
 	return l
 }
 
-// AddItem adds a new item to the list. An item has a main text which will be
-// highlighted when selected. It also has a secondary text which is shown
+// AddMediaItem adds a new item to the list. An item has a main text which will
+// be highlighted when selected. It also has a secondary text which is shown
 // underneath the main text (if it is set to visible) but which may remain
 // empty.
 //
 // The "selected" callback will be invoked when the user selects the item. You
 // may provide nil if no such item is needed or if all events are handled
 // through the selected callback set with SetSelectedFunc().
-func (l *Browser) AddItem(mainText, secondaryText string, selected func()) *Browser {
-	l.items = append(l.items, &mediaItem{
+func (l *Browser) AddMediaItem(library *Library, media *Media, mainText, secondaryText string, selected func()) *Browser {
+
+	l.visibleItem = append(l.visibleItem, &mediaItem{
+		Media:         media,
+		SourceLibrary: library,
+		Owner:         l,
 		MainText:      mainText,
 		SecondaryText: secondaryText,
 		Selected:      selected,
 	})
-	if len(l.items) == 1 && l.changed != nil {
-		item := l.items[0]
+	if len(l.visibleItem) == 1 && l.changed != nil {
+		item := l.visibleItem[0]
 		l.changed(0, item.MainText, item.SecondaryText)
 	}
 	return l
 }
 
-func (l *Browser) InsertItem(index int, mainText, secondaryText string, selected func()) *Browser {
+func (l *Browser) InsertMediaItem(library *Library, media *Media, index int, mainText, secondaryText string, selected func()) *Browser {
 
 	// several different ways to interpret index < 0. one convenient way would
 	// be to insert starting from the end of the list. the safest option, which
@@ -215,26 +344,29 @@ func (l *Browser) InsertItem(index int, mainText, secondaryText string, selected
 	}
 
 	// if the index provided is greater than the number of elements in the list,
-	// just treat this like an ordinary append, using the exported AddItem()
-	if index >= len(l.items) {
-		return l.AddItem(mainText, secondaryText, selected)
+	// then treat this like an ordinary append using the exported AddMediaItem()
+	if index >= len(l.visibleItem) {
+		return l.AddMediaItem(library, media, mainText, secondaryText, selected)
 	}
 
 	newItem := &mediaItem{
+		Media:         media,
+		SourceLibrary: library,
+		Owner:         l,
 		MainText:      mainText,
 		SecondaryText: secondaryText,
 		Selected:      selected,
 	}
 
-	l.items = append(l.items, nil)           // add a nil item to make room in the buffer for newItem
-	copy(l.items[index+1:], l.items[index:]) // shift all items right, starting from insertion index
-	l.items[index] = newItem                 // update the nil item at the insertion index
+	l.visibleItem = append(l.visibleItem, nil)           // add a nil item to make room in the buffer for newItem
+	copy(l.visibleItem[index+1:], l.visibleItem[index:]) // shift all items right, starting from insertion index
+	l.visibleItem[index] = newItem                       // update the nil item at the insertion index
 
-	if l.currentItem >= len(l.items) {
-		l.currentItem = len(l.items) - 1
+	if l.currentItem >= len(l.visibleItem) {
+		l.currentItem = len(l.visibleItem) - 1
 	}
-	if len(l.items) == 1 && l.changed != nil {
-		item := l.items[0]
+	if len(l.visibleItem) == 1 && l.changed != nil {
+		item := l.visibleItem[0]
 		l.changed(0, item.MainText, item.SecondaryText)
 	}
 	return l
@@ -242,19 +374,19 @@ func (l *Browser) InsertItem(index int, mainText, secondaryText string, selected
 
 // GetItemCount returns the number of items in the list.
 func (l *Browser) GetItemCount() int {
-	return len(l.items)
+	return len(l.visibleItem)
 }
 
 // GetItemText returns an item's texts (main and secondary). Panics if the index
 // is out of range.
 func (l *Browser) GetItemText(index int) (main, secondary string) {
-	return l.items[index].MainText, l.items[index].SecondaryText
+	return l.visibleItem[index].MainText, l.visibleItem[index].SecondaryText
 }
 
 // SetItemText sets an item's main and secondary text. Panics if the index is
 // out of range.
 func (l *Browser) SetItemText(index int, main, secondary string) *Browser {
-	item := l.items[index]
+	item := l.visibleItem[index]
 	item.MainText = main
 	item.SecondaryText = secondary
 	return l
@@ -262,7 +394,8 @@ func (l *Browser) SetItemText(index int, main, secondary string) *Browser {
 
 // Clear removes all items from the list.
 func (l *Browser) Clear() *Browser {
-	l.items = nil
+	l.visibleItem = nil
+	l.hiddenItem = nil
 	l.currentItem = 0
 	return l
 }
@@ -310,7 +443,7 @@ func (l *Browser) Draw(screen tcell.Screen) {
 	}
 
 	// Draw the list items.
-	for index, item := range l.items {
+	for index, item := range l.visibleItem {
 		if index < l.viewOffset {
 			continue
 		}
@@ -362,14 +495,14 @@ func (l *Browser) InputHandler() func(event *tcell.EventKey, setFocus func(p tvi
 		case tcell.KeyHome:
 			l.currentItem = 0
 		case tcell.KeyEnd:
-			l.currentItem = len(l.items) - 1
+			l.currentItem = len(l.visibleItem) - 1
 		case tcell.KeyPgDn:
 			l.currentItem += 5
 		case tcell.KeyPgUp:
 			l.currentItem -= 5
 		case tcell.KeyEnter:
-			if l.currentItem >= 0 && l.currentItem < len(l.items) {
-				item := l.items[l.currentItem]
+			if l.currentItem >= 0 && l.currentItem < len(l.visibleItem) {
+				item := l.visibleItem[l.currentItem]
 				if item.Selected != nil {
 					item.Selected()
 				}
@@ -384,13 +517,13 @@ func (l *Browser) InputHandler() func(event *tcell.EventKey, setFocus func(p tvi
 		}
 
 		if l.currentItem < 0 {
-			l.currentItem = len(l.items) - 1
-		} else if l.currentItem >= len(l.items) {
+			l.currentItem = len(l.visibleItem) - 1
+		} else if l.currentItem >= len(l.visibleItem) {
 			l.currentItem = 0
 		}
 
-		if l.currentItem != previousItem && l.currentItem < len(l.items) && l.changed != nil {
-			item := l.items[l.currentItem]
+		if l.currentItem != previousItem && l.currentItem < len(l.visibleItem) && l.changed != nil {
+			item := l.visibleItem[l.currentItem]
 			l.changed(l.currentItem, item.MainText, item.SecondaryText)
 		}
 	})

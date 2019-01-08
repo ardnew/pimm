@@ -28,7 +28,7 @@ import (
 
 const (
 	sideColumnWidth = 32
-	logRowsHeight   = 5 // number of visible log lines + 1
+	logRowsHeight   = 36 // number of visible log lines + 1
 )
 
 var (
@@ -372,6 +372,9 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetRoot(pages, true).
 		SetInputCapture(layout.inputEvent)
 
+	libSelect.
+		selectedLibDropDown(selectedLibraryAllOption, selectedLibraryAll)
+
 	return &layout
 }
 
@@ -582,11 +585,11 @@ func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, hei
 	return 0, 0, 0, 0
 }
 
-func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
+func (l *Layout) insertPosition(name, path string) int {
 
-	fmtPrimary := func(s string) string { return s }
-	fmtSecondary := func(s string) string { return s }
-
+	// determines WHEN the discovered item (discoName, discoPath) should
+	// be inserted based on the current item (currName, currPath)
+	// iteration.
 	shouldInsert := func(discoName, discoPath, currName, currPath string) bool {
 
 		// sorted by name
@@ -596,16 +599,51 @@ func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
 		//return (currPath == discoPath && currName >= discoName) || (currPath >= discoPath)
 	}
 
+	// append by default, because we did not find an item that already
+	// exists in our list which should appear after our new item we are
+	// trying to insert -- i.e. the new item is lexicographically last.
+	var position int = l.browseView.GetItemCount()
+	if numItems := position; numItems > 0 {
+		for i := 0; i < numItems; i++ {
+
+			itemName, itemPath := l.browseView.GetItemText(i)
+
+			insert := shouldInsert(
+				strings.ToUpper(name),
+				strings.ToUpper(path),
+				strings.ToUpper(itemName),
+				strings.ToUpper(itemPath))
+
+			if insert {
+				position = i
+				break
+			}
+		}
+	}
+
+	return position
+
+}
+
+func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
+
+	// the formatting/appearance to use for the item's displayed text.
+	fmtPrimary := func(s string) string { return s }
+	fmtSecondary := func(s string) string { return s }
+
 	var name, path string
 	var add bool = true
 
+	var media *Media
 	switch disco.data[0].(type) {
 	case *AudioMedia:
 		audio := disco.data[0].(*AudioMedia)
+		media = audio.Media
 		name = audio.AbsName
 		path = audio.AbsPath
 	case *VideoMedia:
 		video := disco.data[0].(*VideoMedia)
+		media = video.Media
 		name = video.AbsName
 		path = video.AbsPath
 	case *Subtitles:
@@ -617,28 +655,8 @@ func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
 
 	if add {
 		l.ui.QueueUpdate(func() {
-			// append by default, because we did not find an item that already
-			// exists in our list which should appear after our new item we are
-			// trying to insert -- i.e. the new item is lexicographically last.
-			var position int = l.browseView.GetItemCount()
-			if numItems := position; numItems > 0 {
-				for i := 0; i < numItems; i++ {
-
-					itemName, itemPath := l.browseView.GetItemText(i)
-
-					insert := shouldInsert(
-						strings.ToUpper(name),
-						strings.ToUpper(path),
-						strings.ToUpper(itemName),
-						strings.ToUpper(itemPath))
-
-					if insert {
-						position = i
-						break
-					}
-				}
-			}
-			l.browseView.InsertItem(position, fmtPrimary(name), fmtSecondary(path), nil)
+			position := l.insertPosition(name, path)
+			l.browseView.InsertMediaItem(lib, media, position, fmtPrimary(name), fmtSecondary(path), nil)
 		})
 	}
 
@@ -798,7 +816,7 @@ func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSe
 		libName = append(libName, l.name)
 	}
 
-	for i, name := range libName {
+	for i, name := range libName { // +3 strictly for formatting/appearance
 		libName[i] = fmt.Sprintf(" %-*s", dropDownWidth+3, name)
 	}
 
@@ -833,8 +851,6 @@ func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSe
 		SetDrawFunc(v.drawLibSelectView)
 
 	v.Form = form
-
-	v.selectedLibDropDown(selectedLibraryAllOption, selectedLibraryAll)
 
 	return &v
 }
@@ -876,7 +892,13 @@ func (v *LibSelectView) selectedLibDropDown(option string, optionIndex int) {
 
 	switch v.selectedLibrary {
 	case selectedLibraryAll:
+		infoLog.logf("selected ALL lib = %+v", v)
+		v.layout.browseView.ShowLibrary(nil)
 	default:
+		infoLog.logf("selected lib = %+v", lib)
+		if nil != lib {
+			v.layout.browseView.ShowLibrary(lib)
+		}
 	}
 }
 
