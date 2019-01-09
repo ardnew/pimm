@@ -15,6 +15,8 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/gdamore/tcell"
 	"github.com/rivo/tview"
 )
@@ -29,7 +31,7 @@ type mediaItem struct {
 	Selected      func() // The optional function which is called when the item is selected.
 }
 
-func (l *mediaItem) HideItem() *mediaItem {
+func (l *mediaItem) hideItem() *mediaItem {
 
 	// find our current item in the list of hidden items.
 	hiddenIndex := -1
@@ -53,13 +55,13 @@ func (l *mediaItem) HideItem() *mediaItem {
 
 		// and finally remove it from the list of visible items.
 		if visibleIndex >= 0 && visibleIndex < len(l.Owner.visibleItem) {
-			l.Owner.RemoveItem(visibleIndex)
+			l.Owner.removeItem(visibleIndex)
 		}
 	}
 	return l
 }
 
-func (l *mediaItem) ShowItem() *mediaItem {
+func (l *mediaItem) showItem() *mediaItem {
 	// find our current item in the list of hidden items.
 	hiddenIndex := -1
 	for i, m := range l.Owner.hiddenItem {
@@ -73,8 +75,8 @@ func (l *mediaItem) ShowItem() *mediaItem {
 	if hiddenIndex >= 0 {
 		l.Owner.hiddenItem =
 			append(l.Owner.hiddenItem[:hiddenIndex], l.Owner.hiddenItem[hiddenIndex+1:]...)
-		position := l.SourceLibrary.layout.insertPosition(l.Media.AbsName, l.Media.AbsPath)
-		l.Owner.InsertMediaItem(l.SourceLibrary, l.Media, position, l.MainText, l.SecondaryText, l.Selected)
+		position, primary, secondary := l.Owner.positionForMediaItem(l.Media)
+		l.Owner.insertMediaItem(l.SourceLibrary, l.Media, position, primary, secondary, l.Selected)
 	}
 
 	return l
@@ -126,8 +128,8 @@ type Browser struct {
 	done func()
 }
 
-// NewBrowser returns a new form.
-func NewBrowser() *Browser {
+// newBrowser returns a new form.
+func newBrowser() *Browser {
 	return &Browser{
 		Box:                     tview.NewBox(),
 		hiddenItem:              make([]*mediaItem, 0),
@@ -139,9 +141,56 @@ func NewBrowser() *Browser {
 	}
 }
 
-// SetCurrentItem sets the currently selected item by its index. This triggers
+func (l *Browser) showLibrary(library *Library) {
+
+	infoLog.logf("showLibrary = %+v", library)
+
+	allItems := []*mediaItem{}
+	allItems = append(allItems, l.hiddenItem...)
+	allItems = append(allItems, l.visibleItem...)
+
+	if nil == library {
+		for _, m := range allItems {
+			m.showItem()
+		}
+	} else {
+		//
+		// walk backward over the list so that we do not skip an item when the
+		// list items are shifted due to a removal. for example, with items to
+		// be removed enclosed in curly braces, a forward traversal would result
+		// in the following iterations and resulting list:
+		//
+		//  iter#:  list[]                       description
+		//  ------  ---------------------------  -------------------------------
+		//          [  A , {B}, {C},  D ,  E  ]
+		//      0:     ^                         first item "A" left as-is, not a candidate for removal
+		//          [  A , {B}, {C},  D ,  E  ]
+		//      1:          ^                    next item "B" removed, shift trailing items to the left
+		//          [  A , {C},  D ,  E       ]
+		//      2:               ^               next item "D" left as-is, not a candidate for removal
+		//          [  A , {C},  D ,  E       ]
+		//      3:                    ^          last item "E" left as-is, not a candidate for removal, terminate loop
+		//
+		// so in this example, item "C" originally at list index 2 is skipped
+		// during a forward traversal and remains at list index 1 once the
+		// traversal finishes. traversing the list from the opposite direction
+		// prevents not-yet-examined items from being moved to positions that
+		// have already been evaluated.
+		//
+		for i := len(allItems) - 1; i >= 0; i-- {
+			m := allItems[i]
+			if m.SourceLibrary != library {
+				m.hideItem()
+			} else {
+				m.showItem()
+			}
+		}
+	}
+}
+
+// setCurrentItem sets the currently selected item by its index. This triggers
 // a "changed" event.
-func (l *Browser) SetCurrentItem(index int) *Browser {
+func (l *Browser) setCurrentItem(index int) *Browser {
 	l.currentItem = index
 	if l.currentItem < len(l.visibleItem) && l.changed != nil {
 		item := l.visibleItem[l.currentItem]
@@ -150,16 +199,81 @@ func (l *Browser) SetCurrentItem(index int) *Browser {
 	return l
 }
 
-// GetCurrentItem returns the index of the currently selected list item.
-func (l *Browser) GetCurrentItem() int {
+// getCurrentItem returns the index of the currently selected list item.
+func (l *Browser) getCurrentItem() int {
 	return l.currentItem
 }
 
-// RemoveItem removes the item with the given index (starting at 0) from the
+// setMainTextColor sets the color of the items' main text.
+func (l *Browser) setMainTextColor(color tcell.Color) *Browser {
+	l.mainTextColor = color
+	return l
+}
+
+// setSecondaryTextColor sets the color of the items' secondary text.
+func (l *Browser) setSecondaryTextColor(color tcell.Color) *Browser {
+	l.secondaryTextColor = color
+	return l
+}
+
+// setSelectedTextColor sets the text color of selected items.
+func (l *Browser) setSelectedTextColor(color tcell.Color) *Browser {
+	l.selectedTextColor = color
+	return l
+}
+
+// setSelectedBackgroundColor sets the background color of selected items.
+func (l *Browser) setSelectedBackgroundColor(color tcell.Color) *Browser {
+	l.selectedBackgroundColor = color
+	return l
+}
+
+// setSelectedFocusOnly sets a flag which determines when the currently selected
+// list item is highlighted. If set to true, selected items are only highlighted
+// when the list has focus. If set to false, they are always highlighted.
+func (l *Browser) setSelectedFocusOnly(focusOnly bool) *Browser {
+	l.selectedFocusOnly = focusOnly
+	return l
+}
+
+// setShowSecondaryText determines whether or not to show secondary item texts.
+func (l *Browser) setShowSecondaryText(show bool) *Browser {
+	l.showSecondaryText = show
+	return l
+}
+
+// setChangedFunc sets the function which is called when the user navigates to
+// a list item. The function receives the item's index in the list of items
+// (starting with 0), its main text, and its secondary text.
+//
+// This function is also called when the first item is added or when
+// setCurrentItem() is called.
+func (l *Browser) setChangedFunc(handler func(index int, mainText string, secondaryText string)) *Browser {
+	l.changed = handler
+	return l
+}
+
+// setSelectedFunc sets the function which is called when the user selects a
+// list item by pressing Enter on the current selection. The function receives
+// the item's index in the list of items (starting with 0), its main text, and
+// its secondary text.
+func (l *Browser) setSelectedFunc(handler func(int, string, string)) *Browser {
+	l.selected = handler
+	return l
+}
+
+// setDoneFunc sets a function which is called when the user presses the Escape
+// key.
+func (l *Browser) setDoneFunc(handler func()) *Browser {
+	l.done = handler
+	return l
+}
+
+// removeItem removes the item with the given index (starting at 0) from the
 // list. Does nothing if the index is out of range. This triggers a "changed"
 // event if and only if the currently selected item is changed because of the
 // removal.
-func (l *Browser) RemoveItem(index int) *Browser {
+func (l *Browser) removeItem(index int) *Browser {
 	if index < 0 || index >= len(l.visibleItem) {
 		return l
 	}
@@ -193,130 +307,64 @@ func (l *Browser) RemoveItem(index int) *Browser {
 	return l
 }
 
-func (l *Browser) ShowLibrary(library *Library) {
+// function positionForMediaItem() iterates over the visible items in the media
+// item browser to decide which position the provided media item name and path
+// should be inserted and formats the text to be displayed in both primary and
+// secondary text strings. this method effectively provides the sorting order of
+// the media item library.
+func (l *Browser) positionForMediaItem(media *Media) (int, string, string) {
 
-	infoLog.logf("ShowLibrary = %+v", library)
+	// determines WHEN the discovered item (discoName, discoPath) should be
+	// inserted based on the current item (currName, currPath) interation.
+	shouldInsert := func(discoName, discoPath, currName, currPath string) bool {
 
-	allItems := []*mediaItem{}
-	allItems = append(allItems, l.hiddenItem...)
-	allItems = append(allItems, l.visibleItem...)
+		// sorted by name
+		return (currName == discoName && currPath >= discoPath) || (currName >= discoName)
 
-	if nil == library {
-		//for _, m := range l.hiddenItem {
-		for _, m := range allItems {
-			//infoLog.logf("\tshow: %+v", m)
-			m.ShowItem()
-		}
-	} else {
-		//
-		// walk backward over the list so that we do not skip an item when the
-		// list items are shifted due to a removal. for example, with items to
-		// be removed enclosed in curly braces, a forward traversal would result
-		// in the following iterations and resulting list:
-		//
-		//  iter#:  list[]                       description
-		//  ------  ---------------------------  -------------------------------
-		//          [  A , {B}, {C},  D ,  E  ]
-		//      0:     ^                         first item "A" left as-is, not a candidate for removal
-		//          [  A , {B}, {C},  D ,  E  ]
-		//      1:          ^                    next item "B" removed, shift trailing items to the left
-		//          [  A , {C},  D ,  E       ]
-		//      2:               ^               next item "D" left as-is, not a candidate for removal
-		//          [  A , {C},  D ,  E       ]
-		//      3:                    ^          last item "E" left as-is, not a candidate for removal, terminate loop
-		//
-		// so in this example, item "C" originally at list index 2 is skipped
-		// during a forward traversal and remains at list index 1 once the
-		// traversal finishes. traversing the list from the opposite direction
-		// prevents not-yet-examined items from being moved to positions that
-		// have already been evaluated.
-		//
-		for i := len(allItems) - 1; i >= 0; i-- {
-			m := allItems[i]
-			if m.SourceLibrary != library {
-				//infoLog.logf("\thide: %+v", m)
-				m.HideItem()
-			} else {
-				m.ShowItem()
+		// sorted by path
+		//return (currPath == discoPath && currName >= discoName) || (currPath >= discoPath)
+	}
+
+	// the formatting/appearance to use for the item's displayed text.
+	fmtPrimary := func(m *Media) string { return m.AbsName }
+	fmtSecondary := func(m *Media) string { return m.AbsPath }
+
+	primary := fmtPrimary(media)
+	secondary := fmtSecondary(media)
+
+	// append by default, because we did not find an item that already exists in
+	// our list which should appear after our new item we are trying to insert
+	// -- i.e. the new item is lexicographically last.
+	var position int = l.getItemCount()
+	if numItems := position; numItems > 0 {
+		for i := 0; i < numItems; i++ {
+
+			itemName, itemPath := l.getItemText(i)
+
+			insert := shouldInsert(
+				strings.ToUpper(primary),
+				strings.ToUpper(secondary),
+				strings.ToUpper(itemName),
+				strings.ToUpper(itemPath))
+
+			if insert {
+				position = i
+				break
 			}
 		}
 	}
+	return position, primary, secondary
 }
 
-// SetMainTextColor sets the color of the items' main text.
-func (l *Browser) SetMainTextColor(color tcell.Color) *Browser {
-	l.mainTextColor = color
-	return l
-}
-
-// SetSecondaryTextColor sets the color of the items' secondary text.
-func (l *Browser) SetSecondaryTextColor(color tcell.Color) *Browser {
-	l.secondaryTextColor = color
-	return l
-}
-
-// SetSelectedTextColor sets the text color of selected items.
-func (l *Browser) SetSelectedTextColor(color tcell.Color) *Browser {
-	l.selectedTextColor = color
-	return l
-}
-
-// SetSelectedBackgroundColor sets the background color of selected items.
-func (l *Browser) SetSelectedBackgroundColor(color tcell.Color) *Browser {
-	l.selectedBackgroundColor = color
-	return l
-}
-
-// SetSelectedFocusOnly sets a flag which determines when the currently selected
-// list item is highlighted. If set to true, selected items are only highlighted
-// when the list has focus. If set to false, they are always highlighted.
-func (l *Browser) SetSelectedFocusOnly(focusOnly bool) *Browser {
-	l.selectedFocusOnly = focusOnly
-	return l
-}
-
-// ShowSecondaryText determines whether or not to show secondary item texts.
-func (l *Browser) ShowSecondaryText(show bool) *Browser {
-	l.showSecondaryText = show
-	return l
-}
-
-// SetChangedFunc sets the function which is called when the user navigates to
-// a list item. The function receives the item's index in the list of items
-// (starting with 0), its main text, and its secondary text.
-//
-// This function is also called when the first item is added or when
-// SetCurrentItem() is called.
-func (l *Browser) SetChangedFunc(handler func(index int, mainText string, secondaryText string)) *Browser {
-	l.changed = handler
-	return l
-}
-
-// SetSelectedFunc sets the function which is called when the user selects a
-// list item by pressing Enter on the current selection. The function receives
-// the item's index in the list of items (starting with 0), its main text, and
-// its secondary text.
-func (l *Browser) SetSelectedFunc(handler func(int, string, string)) *Browser {
-	l.selected = handler
-	return l
-}
-
-// SetDoneFunc sets a function which is called when the user presses the Escape
-// key.
-func (l *Browser) SetDoneFunc(handler func()) *Browser {
-	l.done = handler
-	return l
-}
-
-// AddMediaItem adds a new item to the list. An item has a main text which will
+// addMediaItem adds a new item to the list. An item has a main text which will
 // be highlighted when selected. It also has a secondary text which is shown
 // underneath the main text (if it is set to visible) but which may remain
 // empty.
 //
 // The "selected" callback will be invoked when the user selects the item. You
 // may provide nil if no such item is needed or if all events are handled
-// through the selected callback set with SetSelectedFunc().
-func (l *Browser) AddMediaItem(library *Library, media *Media, mainText, secondaryText string, selected func()) *Browser {
+// through the selected callback set with setSelectedFunc().
+func (l *Browser) addMediaItem(library *Library, media *Media, mainText, secondaryText string, selected func()) *Browser {
 
 	l.visibleItem = append(l.visibleItem, &mediaItem{
 		Media:         media,
@@ -333,7 +381,7 @@ func (l *Browser) AddMediaItem(library *Library, media *Media, mainText, seconda
 	return l
 }
 
-func (l *Browser) InsertMediaItem(library *Library, media *Media, index int, mainText, secondaryText string, selected func()) *Browser {
+func (l *Browser) insertMediaItem(library *Library, media *Media, index int, mainText, secondaryText string, selected func()) *Browser {
 
 	// several different ways to interpret index < 0. one convenient way would
 	// be to insert starting from the end of the list. the safest option, which
@@ -344,9 +392,9 @@ func (l *Browser) InsertMediaItem(library *Library, media *Media, index int, mai
 	}
 
 	// if the index provided is greater than the number of elements in the list,
-	// then treat this like an ordinary append using the exported AddMediaItem()
+	// then treat this like an ordinary append using the exported addMediaItem()
 	if index >= len(l.visibleItem) {
-		return l.AddMediaItem(library, media, mainText, secondaryText, selected)
+		return l.addMediaItem(library, media, mainText, secondaryText, selected)
 	}
 
 	newItem := &mediaItem{
@@ -372,28 +420,28 @@ func (l *Browser) InsertMediaItem(library *Library, media *Media, index int, mai
 	return l
 }
 
-// GetItemCount returns the number of items in the list.
-func (l *Browser) GetItemCount() int {
+// getItemCount returns the number of items in the list.
+func (l *Browser) getItemCount() int {
 	return len(l.visibleItem)
 }
 
-// GetItemText returns an item's texts (main and secondary). Panics if the index
+// getItemText returns an item's texts (main and secondary). Panics if the index
 // is out of range.
-func (l *Browser) GetItemText(index int) (main, secondary string) {
+func (l *Browser) getItemText(index int) (main, secondary string) {
 	return l.visibleItem[index].MainText, l.visibleItem[index].SecondaryText
 }
 
-// SetItemText sets an item's main and secondary text. Panics if the index is
+// setItemText sets an item's main and secondary text. Panics if the index is
 // out of range.
-func (l *Browser) SetItemText(index int, main, secondary string) *Browser {
+func (l *Browser) setItemText(index int, main, secondary string) *Browser {
 	item := l.visibleItem[index]
 	item.MainText = main
 	item.SecondaryText = secondary
 	return l
 }
 
-// Clear removes all items from the list.
-func (l *Browser) Clear() *Browser {
+// clear removes all items from the list.
+func (l *Browser) clear() *Browser {
 	l.visibleItem = nil
 	l.hiddenItem = nil
 	l.currentItem = 0

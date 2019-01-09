@@ -28,7 +28,7 @@ import (
 
 const (
 	sideColumnWidth = 32
-	logRowsHeight   = 36 // number of visible log lines + 1
+	logRowsHeight   = 5 // number of visible log lines + 1
 )
 
 var (
@@ -380,19 +380,22 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 
 func (l *Layout) shouldDelegateInputEvent(event *tcell.EventKey) bool {
 
-	switch event.Key() {
-	case tcell.KeyRune:
-		switch event.Rune() {
-		case 'h', 'H', 'j', 'J', 'k', 'K', 'l', 'L':
-			// do NOT support the vi-style navigation keys in the log view
-			l.focusLock.Lock()
-			focused := l.focused
-			l.focusLock.Unlock()
-			if focused == l.logView {
+	l.focusLock.Lock()
+	focused := l.focused
+	l.focusLock.Unlock()
+
+	switch focused.(type) {
+	case *LogView:
+		switch event.Key() {
+		case tcell.KeyRune:
+			switch event.Rune() {
+			case 'h', 'H', 'j', 'J', 'k', 'K', 'l', 'L':
+				// do NOT support the vi-style navigation keys in the log view
 				return false
 			}
 		}
 	}
+
 	return true
 }
 
@@ -585,78 +588,25 @@ func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, hei
 	return 0, 0, 0, 0
 }
 
-func (l *Layout) insertPosition(name, path string) int {
-
-	// determines WHEN the discovered item (discoName, discoPath) should
-	// be inserted based on the current item (currName, currPath)
-	// iteration.
-	shouldInsert := func(discoName, discoPath, currName, currPath string) bool {
-
-		// sorted by name
-		return (currName == discoName && currPath >= discoPath) || (currName >= discoName)
-
-		// sorted by path
-		//return (currPath == discoPath && currName >= discoName) || (currPath >= discoPath)
-	}
-
-	// append by default, because we did not find an item that already
-	// exists in our list which should appear after our new item we are
-	// trying to insert -- i.e. the new item is lexicographically last.
-	var position int = l.browseView.GetItemCount()
-	if numItems := position; numItems > 0 {
-		for i := 0; i < numItems; i++ {
-
-			itemName, itemPath := l.browseView.GetItemText(i)
-
-			insert := shouldInsert(
-				strings.ToUpper(name),
-				strings.ToUpper(path),
-				strings.ToUpper(itemName),
-				strings.ToUpper(itemPath))
-
-			if insert {
-				position = i
-				break
-			}
-		}
-	}
-
-	return position
-
-}
-
 func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
 
-	// the formatting/appearance to use for the item's displayed text.
-	fmtPrimary := func(s string) string { return s }
-	fmtSecondary := func(s string) string { return s }
+	var media *Media = nil
 
-	var name, path string
-	var add bool = true
-
-	var media *Media
 	switch disco.data[0].(type) {
 	case *AudioMedia:
 		audio := disco.data[0].(*AudioMedia)
 		media = audio.Media
-		name = audio.AbsName
-		path = audio.AbsPath
 	case *VideoMedia:
 		video := disco.data[0].(*VideoMedia)
 		media = video.Media
-		name = video.AbsName
-		path = video.AbsPath
 	case *Subtitles:
-		subs := disco.data[0].(*Subtitles)
-		name = subs.AbsName
-		path = subs.AbsPath
-		add = false
+		_ = disco.data[0].(*Subtitles) // TBD: unused currently
 	}
 
-	if add {
+	if nil != media {
 		l.ui.QueueUpdate(func() {
-			position := l.insertPosition(name, path)
-			l.browseView.InsertMediaItem(lib, media, position, fmtPrimary(name), fmtSecondary(path), nil)
+			position, primary, secondary := l.browseView.positionForMediaItem(media)
+			l.browseView.insertMediaItem(lib, media, position, primary, secondary, nil)
 		})
 	}
 
@@ -784,6 +734,7 @@ type LibSelectViewFormItem int
 
 const (
 	lsiLibrary LibSelectViewFormItem = iota
+	lsiCOUNT
 )
 
 // the index used to indicate -all- libraries selected for viewing.
@@ -792,10 +743,11 @@ const selectedLibraryAllOption = "(All)"
 
 type LibSelectView struct {
 	*tview.Form
-	layout    *Layout
-	focusPage string
-	focusNext FocusDelegator
-	focusPrev FocusDelegator
+	libDropDown *tview.DropDown
+	layout      *Layout
+	focusPage   string
+	focusNext   FocusDelegator
+	focusPrev   FocusDelegator
 
 	library         []*Library
 	selectedLibrary int
@@ -827,6 +779,7 @@ func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSe
 	v :=
 		LibSelectView{
 			Form:            nil,
+			libDropDown:     nil,
 			layout:          nil,
 			focusPage:       page,
 			focusNext:       nil,
@@ -836,9 +789,7 @@ func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSe
 		}
 
 	form := tview.NewForm().
-		AddDropDown("Show", libName, 0, v.selectedLibDropDown).
-		AddInputField("Blah", "foobar", 0, nil, nil).
-		AddInputField("What", "hahahahahaha", 0, nil, nil).
+		AddDropDown("Library", libName, 0, v.selectedLibDropDown).
 		SetLabelColor(colorScheme.activeText).
 		SetFieldTextColor(colorScheme.inactiveMenuText).
 		SetFieldBackgroundColor(colorScheme.backgroundSecondary)
@@ -851,6 +802,20 @@ func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSe
 		SetDrawFunc(v.drawLibSelectView)
 
 	v.Form = form
+	v.libDropDown = form.GetFormItem(int(lsiLibrary)).(*tview.DropDown)
+
+	for i := 0; i < int(lsiCOUNT); i++ {
+		f := v.GetFormItem(i)
+		if nil == f {
+			break
+		}
+		switch f.(type) {
+		case *tview.InputField:
+			f.(*tview.InputField).SetInputCapture(v.inputFieldInput)
+		case *tview.DropDown:
+			f.(*tview.DropDown).SetInputCapture(v.dropDownInput)
+		}
+	}
 
 	return &v
 }
@@ -874,7 +839,32 @@ func (v *LibSelectView) blur() {
 }
 func (v *LibSelectView) drawLibSelectView(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
 
-	// Coordinate space for subsequent draws.
+	const (
+		libDimWidth   = 40 // library selection window width
+		libDimHeight  = 20 // ^----------------------- height
+		helpDimWidth  = 40 // help info window width
+		helpDimHeight = 10 // ^--------------- height
+	)
+
+	// update the layout's associated screen field. note that you must be very
+	// careful and not access this field until this status line has been drawn
+	// at least one time.
+	if nil == v.layout.screen {
+		v.layout.screen = &screen
+	}
+
+	captionMedia := fmt.Sprintf("%s  [#%06x]%d", "Total", colorScheme.highlightPrimary.Hex(), 0)
+	captionVideo := fmt.Sprintf("%s  [#%06x]%d", "Video", colorScheme.highlightPrimary.Hex(), 0)
+	captionAudio := fmt.Sprintf("%s  [#%06x]%d", "Audio", colorScheme.highlightPrimary.Hex(), 0)
+	captionPlace := fmt.Sprintf("%s  [#%06x]%d", "PHOLD", colorScheme.highlightPrimary.Hex(), 0)
+
+	ddX, ddY, _, _ := v.libDropDown.GetRect()
+
+	tview.Print(screen, captionMedia, ddX+2, ddY+2, width, tview.AlignLeft, colorScheme.inactiveMenuText)
+	tview.Print(screen, captionVideo, ddX+2, ddY+3, width, tview.AlignLeft, colorScheme.inactiveMenuText)
+	tview.Print(screen, captionAudio, ddX+2, ddY+4, width, tview.AlignLeft, colorScheme.inactiveMenuText)
+	tview.Print(screen, captionPlace, ddX+2, ddY+5, width, tview.AlignLeft, colorScheme.inactiveMenuText)
+
 	return v.Form.GetInnerRect()
 }
 func (v *LibSelectView) selectedLibDropDown(option string, optionIndex int) {
@@ -893,13 +883,40 @@ func (v *LibSelectView) selectedLibDropDown(option string, optionIndex int) {
 	switch v.selectedLibrary {
 	case selectedLibraryAll:
 		infoLog.logf("selected ALL lib = %+v", v)
-		v.layout.browseView.ShowLibrary(nil)
+		v.layout.browseView.showLibrary(nil)
 	default:
 		infoLog.logf("selected lib = %+v", lib)
 		if nil != lib {
-			v.layout.browseView.ShowLibrary(lib)
+			v.layout.browseView.showLibrary(lib)
 		}
 	}
+}
+func (v *LibSelectView) inputFieldInput(event *tcell.EventKey) *tcell.EventKey {
+	switch key := event.Key(); key {
+	case tcell.KeyDown:
+		// treat the down arrow as a tab key for simpler navigation through the
+		// form items.
+		return tcell.NewEventKey(tcell.KeyTab, 0, event.Modifiers())
+	case tcell.KeyUp:
+		// treat the up arrow as a backtab key for simpler navigation through
+		// the form items.
+		return tcell.NewEventKey(tcell.KeyBacktab, 0, event.Modifiers())
+	}
+	return event
+}
+func (v *LibSelectView) dropDownInput(event *tcell.EventKey) *tcell.EventKey {
+	switch key := event.Key(); key {
+	case tcell.KeyRune:
+		// just ignore any character keys pressed, do not perform the default
+		// (annoying) prefix-processing of the DropDown.
+		return nil
+	case tcell.KeyDown, tcell.KeyUp:
+		// treat the up/down arrow keys like tab keys, so that they behave
+		// similar to the input edit fields. the user must press the Enter key
+		// to access the DropDown items.
+		return v.inputFieldInput(tcell.NewEventKey(key, 0, event.Modifiers()))
+	}
+	return event
 }
 
 //------------------------------------------------------------------------------
@@ -916,11 +933,11 @@ type BrowseView struct {
 // where all of the currently available media can be browsed.
 func newBrowseView(ui *tview.Application, page string, lib []*Library) *BrowseView {
 
-	list := NewBrowser()
+	list := newBrowser()
 
 	v := BrowseView{list, nil, page, nil, nil}
 
-	v.SetSelectedFunc(v.selectItem)
+	v.setSelectedFunc(v.selectItem)
 
 	return &v
 }
