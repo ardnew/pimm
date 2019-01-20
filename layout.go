@@ -16,6 +16,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,7 +29,7 @@ import (
 
 const (
 	sideColumnWidth = 32
-	logRowsHeight   = 5 // number of visible log lines + 1
+	logRowsHeight   = 6 // number of visible log lines + 1
 )
 
 var (
@@ -72,6 +73,10 @@ func init() {
 	tview.Styles.MoreContrastBackgroundColor = colorScheme.backgroundTertiary
 	tview.Styles.BorderColor = colorScheme.activeText
 	tview.Styles.PrimaryTextColor = colorScheme.activeText
+}
+
+func busyMessage(intent string) string {
+	return fmt.Sprintf("(not ready) please wait until the current operation completes to %s.", intent)
 }
 
 // type BusyState keeps track of the number of goroutines that are wishing to
@@ -180,6 +185,8 @@ type Layout struct {
 	focusBase  FocusDelegator
 	focused    FocusDelegator
 
+	eventQueue chan func()
+
 	// NOTE: this vars below won't get set until one of the draw routines which
 	// uses a tcell.Screen is called, so be careful when accessing them -- make
 	// sure they're actually available.
@@ -212,10 +219,22 @@ func (l *Layout) show() *ReturnCode {
 			for {
 				select {
 				case <-tick.C:
-					l.ui.QueueUpdateDraw(func() {})
+				DRAIN:
+					for {
+						select {
+						case event := <-l.eventQueue:
+							if event != nil {
+								event()
+							}
+						default:
+							l.ui.QueueUpdateDraw(func() {})
+							break DRAIN
+						}
+					}
+
 				case count := <-l.busy.changed:
 					l.ui.QueueUpdateDraw(func() {})
-					// use ifFreq() so that we kill the Ticker and alloc a new
+					// use setFreq() so that we kill the Ticker and alloc a new
 					// one if and only if the duration actually changed.
 					switch count {
 					case 0:
@@ -357,6 +376,8 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		focusBase:  nil,
 		focused:    nil,
 
+		eventQueue: make(chan func()),
+
 		screen: nil,
 	}
 
@@ -372,13 +393,15 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 		SetRoot(pages, true).
 		SetInputCapture(layout.inputEvent)
 
+	// manually initiate the event handler for selecting the "(All)"-libraries
+	// dropdown to update the meta info in the LibSelectView
 	libSelect.
 		selectedLibDropDown(selectedLibraryAllOption, selectedLibraryAll)
 
 	return &layout
 }
 
-func (l *Layout) shouldDelegateInputEvent(event *tcell.EventKey) bool {
+func (l *Layout) shouldDelegateInputEvent(busy bool, event *tcell.EventKey) bool {
 
 	l.focusLock.Lock()
 	focused := l.focused
@@ -412,6 +435,7 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 	}
 
 	fwdEvent := event
+	isBusy := l.busy.count() > 0
 
 	l.focusLock.Lock()
 	focused := l.focused
@@ -429,15 +453,21 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 		// don't exit on Ctrl+C, it feels unsanitary. instead, notify the
 		// user we can exit cleanly by simply pressing 'q'.
 		fwdEvent = nil
-		infoLog.logf("Please use '%c' key to terminate the application. "+
-			"Ctrl keys are swallowed to prevent choking.", 'q')
+		warnLog.logf("(ignored) please use '%c' key to terminate the "+
+			"application. ctrl keys are swallowed to prevent choking.", 'q')
 	}
 
-	navigationEvent := func(lo *Layout, ek tcell.Key, er rune, em tcell.ModMask, et time.Time) bool {
-
+	navigationEvent := func(lo *Layout, busy bool, ek tcell.Key, er rune, em tcell.ModMask, et time.Time) bool {
 		switch ek {
 		case tcell.KeyRune:
 			if widget, ok := focusWidget[unicode.ToUpper(er)]; ok {
+				// do not process any navigation events (opening windows, dialogs, etc.)
+				// if our BusyState indicates we are preoccupied handling other events,
+				// unless the view we are wanting to access is the HelpView.
+				if busy && (widget != l.helpInfo) {
+					warnLog.logf(busyMessage("navigate or open a submenu"))
+					return false
+				}
 				lo.focusQueue <- widget
 				return true
 			}
@@ -464,7 +494,7 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 	switch focused.(type) {
 
 	case *HelpInfoView:
-		if !navigationEvent(l, evKey, evRune, evMod, evTime) {
+		if !navigationEvent(l, isBusy, evKey, evRune, evMod, evTime) {
 			switch evKey {
 			case tcell.KeyEsc, tcell.KeyRune:
 				l.focusQueue <- l.focusBase
@@ -481,7 +511,7 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 		}
 
 	case *BrowseView:
-		if !navigationEvent(l, evKey, evRune, evMod, evTime) {
+		if !navigationEvent(l, isBusy, evKey, evRune, evMod, evTime) {
 			switch evKey {
 			case tcell.KeyEsc:
 				l.focusQueue <- l.focusBase
@@ -492,7 +522,7 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 		}
 
 	case *LogView:
-		if !navigationEvent(l, evKey, evRune, evMod, evTime) {
+		if !navigationEvent(l, isBusy, evKey, evRune, evMod, evTime) {
 			switch evKey {
 			case tcell.KeyEsc:
 				l.focusQueue <- l.focusBase
@@ -503,7 +533,7 @@ func (l *Layout) inputEvent(event *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 
-	if !l.shouldDelegateInputEvent(event) {
+	if !l.shouldDelegateInputEvent(isBusy, event) {
 		fwdEvent = nil
 	}
 
@@ -549,6 +579,7 @@ func (l *Layout) drawMenuBar(screen tcell.Screen, x int, y int, width int, heigh
 // function drawStatusBar() is the callback handler associated with the bottom-
 // most footer box. this routine is regularly called so that the datetime clock
 // remains accurate along with any status information currently available.
+// this function is the primary driver of the BusyState's UI cycle counter.
 func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
 
 	// the number of periods to draw incrementally during the "working"
@@ -604,10 +635,10 @@ func (l *Layout) addDiscovery(lib *Library, disco *Discovery) *ReturnCode {
 	}
 
 	if nil != media {
-		l.ui.QueueUpdate(func() {
+		l.eventQueue <- func() {
 			position, primary, secondary := l.browseView.positionForMediaItem(media)
 			l.browseView.insertMediaItem(lib, media, position, primary, secondary, nil)
-		})
+		}
 	}
 
 	return nil
@@ -752,6 +783,66 @@ type LibSelectView struct {
 	library         []*Library
 	selectedLibrary int
 	selectedName    string
+	numTotal        uint
+	numVideo        uint
+	numAudio        uint
+}
+
+// function makeUniqueLibraryNames() creates unambiguous library names for all
+// given libraries. this is achieved by starting with the right-most component
+// of each path and iteratively adding its parent directory until the paths
+// can be uniquely identified.
+func makeUniqueLibraryNames(library []*Library) []string {
+
+	reverse := func(a []string) []string {
+		for i, j := 0, len(a)-1; i < j; i, j = i+1, j-1 {
+			a[i], a[j] = a[j], a[i]
+		}
+		return a
+	}
+
+	type indexedSlice struct {
+		index  int
+		slice  []string
+		joined string
+	}
+
+	name := make([]indexedSlice, len(library))
+	maxLength := 0
+	for i := range name {
+		component := strings.Split(strings.TrimRight(library[i].absPath, pathSep), pathSep)
+		name[i] = indexedSlice{1, reverse(component), ""}
+		if length := len(component); length > maxLength {
+			maxLength = length
+		}
+	}
+
+	for n := 0; n < maxLength; n++ {
+		d := map[string]int{}
+		for i := range name {
+
+			index := name[i].index
+			slice := name[i].slice[:index]
+			name[i].joined = strings.Join(slice, pathSep)
+			d[name[i].joined]++
+		}
+		for i := range name {
+			if d[name[i].joined] > 1 {
+				name[i].index++
+			}
+		}
+		if len(d) == len(name) {
+			result := []string{}
+			for _, n := range name {
+				joined := reverse(strings.Split(n.joined, pathSep))
+				result = append(result, strings.Join(joined, pathSep))
+			}
+			return result
+		}
+	}
+
+	// there was an error in the algorithm if we reached here.
+	return []string{}
 }
 
 // function newLibSelectView() allocates and initializes the tview.Form widget
@@ -759,17 +850,18 @@ type LibSelectView struct {
 // options.
 func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSelectView {
 
+	unique := makeUniqueLibraryNames(lib)
 	libName := []string{selectedLibraryAllOption}
 	dropDownWidth := len(selectedLibraryAllOption)
-	for _, l := range lib {
-		if n := len(l.name); n > dropDownWidth {
+	for _, u := range unique {
+		if n := len(u); n > dropDownWidth {
 			dropDownWidth = n
 		}
-		libName = append(libName, l.name)
+		libName = append(libName, u)
 	}
 
 	for i, name := range libName { // +3 strictly for formatting/appearance
-		libName[i] = fmt.Sprintf(" %-*s", dropDownWidth+3, name)
+		libName[i] = fmt.Sprintf("%-*s", dropDownWidth+3, name)
 	}
 
 	// offset library by 1 so that the "all" item is at index 0.
@@ -786,11 +878,15 @@ func newLibSelectView(ui *tview.Application, page string, lib []*Library) *LibSe
 			focusPrev:       nil,
 			library:         xref,
 			selectedLibrary: selectedLibraryAll,
+			selectedName:    selectedLibraryAllOption,
+			numTotal:        0,
+			numVideo:        0,
+			numAudio:        0,
 		}
 
 	form := tview.NewForm().
-		AddDropDown("Library", libName, 0, v.selectedLibDropDown).
-		SetLabelColor(colorScheme.activeText).
+		AddDropDown("   Show:", libName, 0, v.selectedLibDropDown).
+		SetLabelColor(colorScheme.inactiveMenuText).
 		SetFieldTextColor(colorScheme.inactiveMenuText).
 		SetFieldBackgroundColor(colorScheme.backgroundSecondary)
 
@@ -830,12 +926,44 @@ func (v *LibSelectView) page() string         { return v.focusPage }
 func (v *LibSelectView) next() FocusDelegator { return v.focusNext }
 func (v *LibSelectView) prev() FocusDelegator { return v.focusPrev }
 func (v *LibSelectView) focus() {
+	// first update the library media counters upon focus of this view.
+	switch selected := v.library[v.selectedLibrary]; v.selectedLibrary {
+	case selectedLibraryAll:
+		v.updateMediaCount(v.library...)
+	default:
+		if nil != selected {
+			v.updateMediaCount(selected)
+		}
+	}
 	page := v.page()
 	v.layout.pages.ShowPage(page)
 }
 func (v *LibSelectView) blur() {
 	page := v.page()
 	v.layout.pages.HidePage(page)
+}
+
+// function updateMediaCount() iterates over the given libraries and counts the
+// number of each kind of media discovered. the LibSelectView object's counts
+// are immediately updated for reading.
+func (v *LibSelectView) updateMediaCount(library ...*Library) {
+
+	v.numVideo = 0
+	v.numAudio = 0
+
+	for _, l := range library {
+		if nil != l {
+			v.numVideo +=
+				l.db.numRecordsLoad[ecMedia][mkVideo] +
+					l.db.numRecordsScan[ecMedia][mkVideo]
+
+			v.numAudio +=
+				l.db.numRecordsLoad[ecMedia][mkAudio] +
+					l.db.numRecordsScan[ecMedia][mkAudio]
+		}
+	}
+
+	v.numTotal = v.numVideo + v.numAudio
 }
 func (v *LibSelectView) drawLibSelectView(screen tcell.Screen, x int, y int, width int, height int) (int, int, int, int) {
 
@@ -853,45 +981,87 @@ func (v *LibSelectView) drawLibSelectView(screen tcell.Screen, x int, y int, wid
 		v.layout.screen = &screen
 	}
 
-	captionMedia := fmt.Sprintf("%s  [#%06x]%d", "Total", colorScheme.highlightPrimary.Hex(), 0)
-	captionVideo := fmt.Sprintf("%s  [#%06x]%d", "Video", colorScheme.highlightPrimary.Hex(), 0)
-	captionAudio := fmt.Sprintf("%s  [#%06x]%d", "Audio", colorScheme.highlightPrimary.Hex(), 0)
-	captionPlace := fmt.Sprintf("%s  [#%06x]%d", "PHOLD", colorScheme.highlightPrimary.Hex(), 0)
+	v.SetTitle(fmt.Sprintf(" Library: [#%06x]%s ", colorScheme.highlightPrimary.Hex(), v.selectedName))
+
+	// any existing library scan times must have occurred before right now.
+	lastScan := time.Now()
+	selectedLibrary := v.library[v.selectedLibrary]
+	if nil != selectedLibrary {
+		lastScan = selectedLibrary.lastScan
+	} else {
+		// if showing all libraries, display the -oldest- scan time as it is the
+		// most conservative choice.
+		for _, l := range v.library {
+			if nil != l {
+				if l.lastScan.Before(lastScan) {
+					lastScan = l.lastScan
+				}
+			}
+		}
+	}
 
 	ddX, ddY, _, _ := v.libDropDown.GetRect()
 
-	tview.Print(screen, captionMedia, ddX+2, ddY+2, width, tview.AlignLeft, colorScheme.inactiveMenuText)
-	tview.Print(screen, captionVideo, ddX+2, ddY+3, width, tview.AlignLeft, colorScheme.inactiveMenuText)
-	tview.Print(screen, captionAudio, ddX+2, ddY+4, width, tview.AlignLeft, colorScheme.inactiveMenuText)
-	tview.Print(screen, captionPlace, ddX+2, ddY+5, width, tview.AlignLeft, colorScheme.inactiveMenuText)
+	fmtInfoRow := func(label, value string) string {
+		return fmt.Sprintf("[#%06x]%10s: [#%06x]%s",
+			colorScheme.inactiveMenuText.Hex(), label,
+			colorScheme.highlightPrimary.Hex(), value)
+	}
+
+	for i, s := range []string{
+		fmtInfoRow("Video", strconv.FormatUint(uint64(v.numVideo), 10)),
+		fmtInfoRow("Audio", strconv.FormatUint(uint64(v.numAudio), 10)),
+		fmtInfoRow("Last scan", lastScan.Format("2006/01/02 15:04:05")),
+	} {
+		tview.Print(screen, s, ddX+3, ddY+2+i, width, tview.AlignLeft, colorScheme.inactiveMenuText)
+	}
 
 	return v.Form.GetInnerRect()
 }
 func (v *LibSelectView) selectedLibDropDown(option string, optionIndex int) {
 
+	// do not handle any dropdown selection if we are preoccupied handling some
+	// other event or request.
+	if isBusy := v.layout.busy.count() > 0; isBusy {
+		return
+	}
+
+	// immediately and unconditionally set the class-visible variable which
+	// holds the user-selected library index.
 	v.selectedLibrary = optionIndex
-	lib := v.library[v.selectedLibrary]
 
-	if nil != lib {
-		v.selectedName = strings.TrimSpace(lib.name)
-	} else {
-		v.selectedName = strings.TrimSpace(option)
-	}
+	// include all libraries by default, and then filter the list down based on
+	// user selections.
+	includedLib := v.library
 
-	v.SetTitle(fmt.Sprintf(" Library: [#%06x]%s ", colorScheme.highlightPrimary.Hex(), v.selectedName))
-
-	switch v.selectedLibrary {
-	case selectedLibraryAll:
-		infoLog.logf("selected ALL lib = %+v", v)
-		v.layout.browseView.showLibrary(nil)
-	default:
-		infoLog.logf("selected lib = %+v", lib)
-		if nil != lib {
-			v.layout.browseView.showLibrary(lib)
+	// if optionIndex is selectedLibraryAll(0), then the value of "selected"
+	// should be nil, which showLibrary() interprets as "all libraries".
+	selected := includedLib[optionIndex]
+	if optionIndex != selectedLibraryAll {
+		if nil == selected {
+			// this is an error; we should always have a Library at the selected
+			// option index unless it is index 0 (i.e. selectedLibraryAll).
+			return
 		}
+		// user selected an option that -isn't- the "(All)"-libraries selection,
+		// so only show that one selected Library.
+		includedLib = []*Library{selected}
 	}
+
+	// update the selected library data and content counters based on the list
+	// of selected libraries.
+	v.updateMediaCount(includedLib...)
+	v.selectedName = strings.TrimSpace(option)
+	go func() {
+		// protect the libraries from being modified while we are updating the
+		// media browser and library selection.
+		v.layout.busy.inc()
+		v.layout.browseView.showLibrary(selected)
+		v.layout.busy.dec()
+	}()
 }
 func (v *LibSelectView) inputFieldInput(event *tcell.EventKey) *tcell.EventKey {
+	isBusy := v.layout.busy.count() > 0
 	switch key := event.Key(); key {
 	case tcell.KeyDown:
 		// treat the down arrow as a tab key for simpler navigation through the
@@ -901,19 +1071,33 @@ func (v *LibSelectView) inputFieldInput(event *tcell.EventKey) *tcell.EventKey {
 		// treat the up arrow as a backtab key for simpler navigation through
 		// the form items.
 		return tcell.NewEventKey(tcell.KeyBacktab, 0, event.Modifiers())
+	default:
+		// do not allow the user to edit any input fields until we have finished
+		// processing whatever has flagged out BusyState indicator.
+		if isBusy {
+			event = nil
+		}
 	}
 	return event
 }
 func (v *LibSelectView) dropDownInput(event *tcell.EventKey) *tcell.EventKey {
+	isBusy := v.layout.busy.count() > 0
 	switch key := event.Key(); key {
 	case tcell.KeyRune:
 		// just ignore any character keys pressed, do not perform the default
 		// (annoying) prefix-processing of the DropDown.
-		return nil
+		event = nil
+	case tcell.KeyEnter:
+		// do not allow the user to select a new library until we have finished
+		// processing whatever has flagged our BusyState indicator.
+		if isBusy {
+			warnLog.logf(busyMessage("select a new library"))
+			event = nil
+		}
 	case tcell.KeyDown, tcell.KeyUp:
-		// treat the up/down arrow keys like tab keys, so that they behave
-		// similar to the input edit fields. the user must press the Enter key
-		// to access the DropDown items.
+		// handle the up/down keys with the same event handler as the input
+		// fields so that they behave like tab/backtab. the user must press the
+		// Enter key to actually access the DropDown items.
 		return v.inputFieldInput(tcell.NewEventKey(key, 0, event.Modifiers()))
 	}
 	return event
@@ -934,9 +1118,7 @@ type BrowseView struct {
 func newBrowseView(ui *tview.Application, page string, lib []*Library) *BrowseView {
 
 	list := newBrowser()
-
 	v := BrowseView{list, nil, page, nil, nil}
-
 	v.setSelectedFunc(v.selectItem)
 
 	return &v
@@ -956,11 +1138,8 @@ func (v *BrowseView) focus() {
 	v.layout.pages.ShowPage(page)
 	v.layout.ui.SetFocus(v.Browser)
 }
-func (v *BrowseView) blur() {
-}
-func (v *BrowseView) selectItem(index int, mainText, secondaryText string) {
-
-}
+func (v *BrowseView) blur()                                                {}
+func (v *BrowseView) selectItem(index int, mainText, secondaryText string) {}
 
 //------------------------------------------------------------------------------
 
@@ -976,7 +1155,7 @@ type LogView struct {
 // where all runtime log data is navigated by and displayed to the user.
 func newLogView(ui *tview.Application, page string, lib []*Library) *LogView {
 
-	logChanged := func() { ui.QueueUpdateDraw(func() {}) }
+	logChanged := func() {}
 	logDone := func(key tcell.Key) {}
 
 	view := tview.NewTextView().

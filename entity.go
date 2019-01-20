@@ -28,22 +28,12 @@ import (
 // stored in the persistent database.
 type EntityClass int
 
+// constant enum IDs for the various structs that embed/subclass Entity.
 const (
 	ecUnknown EntityClass = iota - 1 // = -1
 	ecMedia                          // =  0
 	ecSupport                        // =  1
 	ecCOUNT                          // =  2
-)
-
-var (
-	entityColName = [ecCOUNT][]string{
-		mediaColName[:],   // 0 = ecMedia
-		supportColName[:], // 1 = ecSupport
-	}
-	entityIndex = [ecCOUNT][]*EntityIndex{
-		mediaIndex[:],   // 0 = ecMedia
-		supportIndex[:], // 1 = ecSupport
-	}
 )
 
 // type Entity is used to describe any sort of file encountered on the file
@@ -67,12 +57,33 @@ type Entity struct {
 // type EntityRecord represents the struct stored in the database for an
 // individual media or support record
 type EntityRecord map[string]interface{}
+
+// type EntityIndex is a slice in which each string element corresponds to the
+// name of the corresponding type's struct field used as a database column that
+// needs to be indexed for searching purposes.
 type EntityIndex []string
+
+// type StorableEntity defines the functions that must be defined for any struct
+// that embeds/subclasses Entity and supports storage in the database engine.
+// note that Entity itself does not implement these functions!
 type StorableEntity interface {
 	toRecord() (*EntityRecord, *ReturnCode)
 	fromRecord([]byte) *ReturnCode
 	fromID(*db.Col, int) *ReturnCode
 }
+
+// storage for the names and database indices for each enum ID of the various
+// structs that embed/subclass Entity.
+var (
+	entityColName = [ecCOUNT][]string{
+		mediaColName[:],   // 0 = ecMedia
+		supportColName[:], // 1 = ecSupport
+	}
+	entityIndex = [ecCOUNT][]*EntityIndex{
+		mediaIndex[:],   // 0 = ecMedia
+		supportIndex[:], // 1 = ecSupport
+	}
+)
 
 // function newEntity() creates a new file object that serves as the fundamental
 // type constituting any sort of file capable of being referenced on the file

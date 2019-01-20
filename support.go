@@ -42,11 +42,15 @@ var (
 	}
 )
 
+// type Support is used to reference every kind of support file that is capable
+// of supplementing media file capabilites.
 type Support struct {
 	*Entity             // common entity info
 	Kind    SupportKind // type of support file
 }
 
+// type Subtitles is a specialized type of support containing struct fields
+// relevant only to subtitles.
 type Subtitles struct {
 	*Support        // common support info
 	KnownVideoMedia []VideoMedia
@@ -307,6 +311,7 @@ func (s *Subtitles) fromID(col *db.Col, id int) *ReturnCode {
 // a limitation of the database engine being used. if it becomes a significant
 // problem, we can create additional fields in the records that have a fixed,
 // known character case and use those fields for the queries.]
+// --
 // if argument update is true, then the database is updated to store all of the
 // bi-directional associations discovered between this Subtitles object and its
 // VideoMedia objects. the argument subID is the current doc ID of this

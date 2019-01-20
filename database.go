@@ -30,6 +30,7 @@ import (
 	//"github.com/davecgh/go-spew/spew"
 )
 
+// local unexported constants for the database engine.
 const (
 	dataConfigFileName  = "data-config.json"
 	dataConfigFilePerms = 0644
@@ -52,8 +53,8 @@ var (
 // initial index and cache sizes
 type JSONDataConfig struct {
 	options        *Options // not stored in the json data
-	MaxRecordSize  int      `json:"DocMaxRoom"`     // <=- maximum size of a single document that will ever be accepted into database.
-	DiskBufferSize int      `json:"ColFileGrowth"`  // <=- size (in bytes) of each collection's pre-allocated files.
+	MaxRecordSize  int      `json:"DocMaxRoom"`     // maximum size of a single document that will ever be accepted into the database.
+	DiskBufferSize int      `json:"ColFileGrowth"`  // size (in bytes) of each collection's pre-allocated files.
 	HashBucketSize int      `json:"PerBucket"`      // number of entries pre-allocated to each hash table bucket.
 	HashBufferSize int      `json:"HTFileGrowth"`   // size (in bytes) to grow hash table file to fit in more entries.
 	HashedBitsSize uint     `json:"HashBits"`       // number of bits to consider for hashing indexed key, also determines the initial number of buckets in a hash table file.

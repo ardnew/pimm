@@ -7,8 +7,9 @@
 //
 //  DESCRIPTION
 //    based on tview.List, this implements all methods of the tview.Primitive
-//    interface. this affords an easier means of changing the appearance of the
-//    tview.List widget used for presenting media lists to the user.
+//    interface. this affords an easier means of changing the appearance and
+//    behaviors of the tview.List widget used as the primary interface for
+//    presenting media lists to the user.
 //
 // =============================================================================
 
@@ -21,63 +22,100 @@ import (
 	"github.com/rivo/tview"
 )
 
-// mediaItem represents one item in a Browser.
+// local unexported constants for the Browser primitive.
+const (
+	invalidIndex = -1
+)
+
+// mediaItem represents one Media object in a Browser.
 type mediaItem struct {
-	*Media
-	SourceLibrary *Library
-	Owner         *Browser
-	MainText      string // The main text of the list item.
-	SecondaryText string // A secondary text to be shown underneath the main text.
-	Selected      func() // The optional function which is called when the item is selected.
+	*Media                 // the corresponding Media item represented by this object.
+	SourceLibrary *Library // the Library collection in which this item was found.
+	Owner         *Browser // the Browser list in which this item is a member.
+	MainText      string   // The main text of the list item.
+	SecondaryText string   // A secondary text to be shown underneath the main text.
+	Selected      func()   // The optional function which is called when the item is selected.
 }
 
-func (l *mediaItem) hideItem() *mediaItem {
+// function isValidIndex() checks if a given index is valid (in-range) for the
+// provided mediaItem slice.
+func isValidIndex(l []*mediaItem, i int) bool {
+	return invalidIndex != i && i >= 0 && i < len(l)
+}
 
-	// find our current item in the list of hidden items.
-	hiddenIndex := -1
-	for i, m := range l.Owner.hiddenItem {
-		if m == l {
-			hiddenIndex = i
-			break
+// function findItem() attempts to locate the receiver in a given mediaItem
+// slice and returns the first index in which it is found along with a boolean
+// flag indicating if the item was found (true) or not (false).
+func (m *mediaItem) findItem(l []*mediaItem) (int, bool) {
+	for i, a := range l {
+		if a == m {
+			return i, true
 		}
 	}
-	// append it to the hidden items list if it doesn't exist there already.
-	if hiddenIndex < 0 {
+	return invalidIndex, false
+}
+
+// function hideItem() removes a mediaItem from its owner Browser by removing it
+// from the list of items displayed to the user and appending it to a separate
+// private list of items which are not drawn on screen. items hidden in this way
+// can be restored to visibility by calling it's companion function showItem().
+func (l *mediaItem) hideItem() *mediaItem {
+
+	// verify our item doesn't already exist in the list of hidden items.
+	_, isHidden := l.findItem(l.Owner.hiddenItem)
+
+	// append to the hidden items list only if it doesn't exist there already.
+	if !isHidden {
 		l.Owner.hiddenItem = append(l.Owner.hiddenItem, l)
 
-		visibleIndex := -1
-		for i, m := range l.Owner.visibleItem {
-			if m == l {
-				visibleIndex = i
-				break
-			}
-		}
+		// theoretically, the only way an item could exist in the visible items
+		// list is if it doesn't exist in the hidden items list. so only in this
+		// case do we try to find its index among the visible items.
+		visibleIndex, isVisible := l.findItem(l.Owner.visibleItem)
 
-		// and finally remove it from the list of visible items.
-		if visibleIndex >= 0 && visibleIndex < len(l.Owner.visibleItem) {
+		// and finally, if found, remove it from the list of visible items.
+		if isVisible {
 			l.Owner.removeItem(visibleIndex)
 		}
 	}
+
+	// if the item exists in the hidden items list, we currently do not even
+	// attempt to locate it in the visible items list. this could be a mistake,
+	// but at the moment it saves us some processing cycles (for a full linear
+	// search) as it logically makes no sense for this condition to exist.
+
 	return l
 }
 
+// function showItem() restores an item that was hidden with the companion
+// function hideItem() by removing it from the private hidden items list and
+// inserting it back into the list of visible items in the correct position.
 func (l *mediaItem) showItem() *mediaItem {
+
 	// find our current item in the list of hidden items.
-	hiddenIndex := -1
-	for i, m := range l.Owner.hiddenItem {
-		if m == l {
-			hiddenIndex = i
-			break
-		}
-	}
-	// remove the item by appending the items trailing our hidden index to the
-	// items preceding it.
-	if hiddenIndex >= 0 {
+	hiddenIndex, isHidden := l.findItem(l.Owner.hiddenItem)
+
+	// verify the item was hidden before trying to reinsert it back into the
+	// visible items list. there's no reason it shouldn't be in the hidden items
+	// list unless its already in the visible items list.
+	if isHidden {
+		// remove the item by appending the items trailing our hidden item index
+		// to the items preceding it, replacing our hidden items list with the
+		// result of this list concatenation.
 		l.Owner.hiddenItem =
 			append(l.Owner.hiddenItem[:hiddenIndex], l.Owner.hiddenItem[hiddenIndex+1:]...)
+
+			// and finally, locate the correct insertion position in the visible
+			// items list for the previously hidden item, as other items may have
+			// been added or removed since this item was last hidden.
 		position, primary, secondary := l.Owner.positionForMediaItem(l.Media)
 		l.Owner.insertMediaItem(l.SourceLibrary, l.Media, position, primary, secondary, l.Selected)
 	}
+
+	// if the item does not exist in the hidden items list, then do not attempt
+	// to insert it into the visible items list. this may be a mistake, but at
+	// the moment it saves us some processing cycles (for a full linear search)
+	// as it logically makes no sense for this condition to exist.
 
 	return l
 }
@@ -132,7 +170,8 @@ type Browser struct {
 func newBrowser() *Browser {
 	return &Browser{
 		Box:                     tview.NewBox(),
-		hiddenItem:              make([]*mediaItem, 0),
+		visibleItem:             []*mediaItem{},
+		hiddenItem:              []*mediaItem{},
 		showSecondaryText:       true,
 		mainTextColor:           colorScheme.activeText,
 		secondaryTextColor:      colorScheme.inactiveText,
@@ -141,15 +180,24 @@ func newBrowser() *Browser {
 	}
 }
 
+// function showLibrary() filters the list of data items shown in the Browser on
+// a per-library basis. it accepts no other parameters and uses no other
+// criteria to determine which data items to display. if a Library is provided,
+// then only the items which are members of that library will be displayed. if
+// a nil value is provided (the default), then all data items from all libraries
+// are displayed.
 func (l *Browser) showLibrary(library *Library) {
 
-	infoLog.logf("showLibrary = %+v", library)
-
+	// create a single slice containing -all- items for simpler traversal of all
+	// candidates.
 	allItems := []*mediaItem{}
 	allItems = append(allItems, l.hiddenItem...)
 	allItems = append(allItems, l.visibleItem...)
 
+	// check if we are intending to filter the items
 	if nil == library {
+		// a nil library means no filtering, display all data items from all
+		// libraries.
 		for _, m := range allItems {
 			m.showItem()
 		}
@@ -287,16 +335,18 @@ func (l *Browser) removeItem(index int) *Browser {
 	// currently selected item is outside the range of the list after item
 	// removal (and the resulting list is non-empty) or if the item removed is
 	// the currently selected item. in either case, the currently selected item
-	// must be changed.
+	// must be changed. in particular for these cases, it must be decremented.
 	changeCurrentItem :=
 		(l.currentItem >= length && length > 0) || (l.currentItem == index)
 
 	// if we've determined the currently selected item should be changed, then
-	// perform the change (clamped to list length as upper bound) and trigger
+	// perform the change (clamped to list domain [0, length-1]) and trigger
 	// a "changed" event.
 	if changeCurrentItem {
 		l.currentItem--
-		if l.currentItem >= length {
+		if l.currentItem < 0 {
+			l.currentItem = 0
+		} else if l.currentItem >= length {
 			l.currentItem = length - 1
 		}
 		if nil != l.changed {
@@ -304,6 +354,7 @@ func (l *Browser) removeItem(index int) *Browser {
 			l.changed(l.currentItem, item.MainText, item.SecondaryText)
 		}
 	}
+
 	return l
 }
 
@@ -315,7 +366,7 @@ func (l *Browser) removeItem(index int) *Browser {
 func (l *Browser) positionForMediaItem(media *Media) (int, string, string) {
 
 	// determines WHEN the discovered item (discoName, discoPath) should be
-	// inserted based on the current item (currName, currPath) interation.
+	// inserted based on the current item (currName, currPath) iteration.
 	shouldInsert := func(discoName, discoPath, currName, currPath string) bool {
 
 		// sorted by name
@@ -381,6 +432,10 @@ func (l *Browser) addMediaItem(library *Library, media *Media, mainText, seconda
 	return l
 }
 
+// function insertMediaItem() accepts all parameters necessary to define a media
+// item, creates it, and then inserts it into the list at the correct position
+// among -all- data items. this is effectively an insertion sort implemented
+// with linear traversal -- so not the fastest, but simple and effective.
 func (l *Browser) insertMediaItem(library *Library, media *Media, index int, mainText, secondaryText string, selected func()) *Browser {
 
 	// several different ways to interpret index < 0. one convenient way would
@@ -410,9 +465,14 @@ func (l *Browser) insertMediaItem(library *Library, media *Media, index int, mai
 	copy(l.visibleItem[index+1:], l.visibleItem[index:]) // shift all items right, starting from insertion index
 	l.visibleItem[index] = newItem                       // update the nil item at the insertion index
 
+	// if our currently selected item is beyond the end of our slice, change it
+	// to be the last element of the slice.
 	if l.currentItem >= len(l.visibleItem) {
 		l.currentItem = len(l.visibleItem) - 1
 	}
+
+	// if this is the first item we've added to the list, trigger a "changed"
+	// event.
 	if len(l.visibleItem) == 1 && l.changed != nil {
 		item := l.visibleItem[0]
 		l.changed(0, item.MainText, item.SecondaryText)
@@ -465,37 +525,59 @@ func (l *Browser) Draw(screen tcell.Screen) {
 		return 0
 	}
 
+	// ensure the embedded Box primitive drawing occurs for all of the basic
+	// appearance logic.
 	l.Box.Draw(screen)
 
 	// Determine the dimensions.
 	x, y, width, height := l.GetInnerRect()
 	yMax := y + height
 
+	// the height of our data items list elements affects how many data items we
+	// can fit on screen at any one time.
 	itemHeight := 1
 	if l.showSecondaryText {
 		itemHeight = 2
 	}
 	itemsPerPage := height / itemHeight
 
-	// We want to keep the current selection in view. What is our offset?
+	// we want to keep the current selection in view. What is our offset? check
+	// if our current selection lies within the range of our current view offset
+	// and the offset plus number of items we can fit on screen. if so, then do
+	// not adjust the displayed items. if not, then determine which direction
+	// we need to scroll so that it does.
 	pos := contains(l.currentItem, l.viewOffset, l.viewOffset+itemsPerPage-1)
 	switch {
 	case pos < 0:
+		// our current selection exists prior all items currently visible. so
+		// scroll the view up so that our currently selected item exists as the
+		// top-most visible item.
 		l.viewOffset = l.currentItem
 	case pos > 0:
+		// our current selection exists following all items currently visible.
+		// so scroll the view down so that our currently selected item exists as
+		// the bottom-most visible item.
 		l.viewOffset = l.currentItem - (itemsPerPage - 1)
 	default:
 		// Adjust the viewing window if and only if our current position is not
 		// inside the range of what's currently visible. Otherwise, let the user
-		// navigate the list items freely, as in this default case.
+		// navigate the list items freely, as in this default case -- we are not
+		// scrolling in any direction, only the current selection highlight is
+		// being moved on screen.
 	}
 
-	// Draw the list items.
+	// iterate over all possible items in the list of visible items, drawing
+	// only those that lie within the range of what's viewable on screen.
 	for index, item := range l.visibleItem {
+
+		// skip all data items prior our view offset.
 		if index < l.viewOffset {
 			continue
 		}
 
+		// bail out once we've traversed beyond our current offset plus number
+		// of items we can fit on screen. all visible items have already been
+		// drawn by this point in the list traversal.
 		if y >= yMax {
 			break
 		}
@@ -505,6 +587,8 @@ func (l *Browser) Draw(screen tcell.Screen) {
 
 		// Background color of selected text.
 		if index == l.currentItem && (!l.selectedFocusOnly || l.HasFocus()) {
+			// we have to color each individual cell of the current row, so we
+			// iterate over each column.
 			for bx := 0; bx < width; bx++ {
 				m, c, style, _ := screen.GetContent(x+bx, y)
 				fg, _, _ := style.Decompose()
@@ -516,14 +600,17 @@ func (l *Browser) Draw(screen tcell.Screen) {
 			}
 		}
 
+		// increment our current list traversal offset.
 		y++
-
-		if y >= yMax {
-			break
-		}
 
 		// Secondary text.
 		if l.showSecondaryText {
+
+			// a second check to bail out of the list traversal in the event
+			// that only part of the data item can be drawn on screen.
+			if y >= yMax {
+				break
+			}
 			tview.Print(screen, item.SecondaryText, x, y, width, tview.AlignLeft, l.secondaryTextColor)
 			y++
 		}

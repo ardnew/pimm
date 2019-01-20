@@ -36,8 +36,9 @@ type Library struct {
 	dataDir string    // directory containing all known library databases
 	db      *Database // database containing all known media in this library
 
-	busyState *BusyState // the global busy state
-	layout    *Layout    // the primary tview interface
+	busyState *BusyState // reference to the global busy state mutex
+
+	layout *Layout // reference to the primary text user interface (TUI)
 
 	loadComplete chan interface{} // synchronization lock
 	loadStart    chan time.Time   // counting semaphore to limit number of concurrent loaders
@@ -46,6 +47,8 @@ type Library struct {
 	scanComplete chan interface{} // synchronization lock
 	scanStart    chan time.Time   // counting semaphore to limit number of concurrent scanners
 	scanElapsed  time.Duration    // measures time elapsed for scan to complete (use internally, not thread-safe!)
+
+	lastScan time.Time // the datetime at which this library was last scanned
 }
 
 // type PathHandlerFunc represents a function that accepts a Library, file path,
@@ -81,6 +84,10 @@ func kindOfFileExt(table *ExtTable, ext string) (string, bool) {
 // type DiscoveryMethod represents the method by which media is located.
 type DiscoveryMethod int
 
+// local unexported constants which categorize the method by which media items
+// are discovered. items discovered by "load" are previously-known items being
+// loaded by the database, and items discovered by "scan" were encountered (for
+// the first time) by file system traversal.
 const (
 	dmUnknown DiscoveryMethod = iota - 1 // = -1
 	dmLoad                               // = 0 loaded from database
@@ -103,7 +110,7 @@ func newDiscovery(d ...interface{}) *Discovery {
 	return &Discovery{time: time.Now(), data: d}
 }
 
-// unexported constants
+// local unexported constants controlling the behavior of the library scanners.
 const (
 	depthUnlimited     = 0
 	maxLibraryScanners = 1
@@ -174,8 +181,13 @@ func newLibrary(opt *Options, busy *BusyState, lib string, lim uint, curr []*Lib
 		dataDir: dat,
 		db:      db,
 
+		// mutex which controls interaction by the various goroutines to limited
+		// system resources such as database tables, UI primitives, etc.
 		busyState: busy,
-		layout:    nil,
+
+		// we will not necessarily have a layout reference in the event that the
+		// user is running in CLI mode, so keep nil by default.
+		layout: nil,
 
 		loadComplete: make(chan interface{}),
 		loadStart:    make(chan time.Time, maxLibraryScanners),
@@ -184,6 +196,8 @@ func newLibrary(opt *Options, busy *BusyState, lib string, lim uint, curr []*Lib
 		scanComplete: make(chan interface{}),
 		scanStart:    make(chan time.Time, maxLibraryScanners),
 		scanElapsed:  0,
+
+		lastScan: time.Time{},
 	}, nil
 }
 
@@ -279,8 +293,8 @@ func (l *Library) loadDive(ph *PathHandler, class EntityClass, kind int) (uint, 
 			}
 			count++
 			return true // move on to next record
-
 		})
+
 	return count, ret
 }
 
@@ -308,9 +322,13 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 	// isn't already filled to capacity.
 	select {
 	case l.loadStart <- time.Now():
+
+		// notify the user that a potentially time-intensive operation has
+		// begun and user interactions will be limited.
 		if !isCLIMode {
 			l.busyState.inc()
 		}
+
 		// the write succeeded, so we can initiate loading. keep track of the
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
@@ -325,11 +343,16 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 				}
 			}
 		}
+
+		// we've finished the loading operations, so remove the busy indicator
+		// to indicate that normal user interactions may resume (if no other
+		// event has the semaphore still incremented).
 		l.loadElapsed = time.Since(<-l.loadStart)
 		if !isCLIMode {
 			l.busyState.dec()
 		}
 
+		// construct a summary message for the load operation.
 		total, summary := l.db.totalRecordsString(dmLoad, -1, -1)
 		if total > 0 {
 			infoLog.verbosef(
@@ -341,6 +364,7 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 				l.name, l.loadElapsed.Round(time.Millisecond))
 		}
 		numLoad = total
+
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
@@ -350,6 +374,8 @@ func (l *Library) load(handler *PathHandler) (uint, *ReturnCode) {
 			"load(): max number of loaders reached: %q (max = %d)",
 			l.absPath, maxLibraryScanners)
 	}
+
+	// return a count of the total number of entities successfully loaded.
 	return numLoad, err
 }
 
@@ -367,7 +393,6 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 	}
 
 	// for concision, show the relative path by default in any diagnostics/logs.
-	//dispPath := absPath
 	dispPath := relPath
 
 	// read fs attributes to determine how we handle the file.
@@ -424,15 +449,21 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 		// media exists in the associated collection of this library's database.
 		seenFile := func(lib *Library, class EntityClass, kind int, path string) (bool, error) {
 
-			var index int = 0
-			switch class {
-			case ecMedia:
-				index = int(mxPath)
-			case ecSupport:
-				index = int(sxPath)
-			default:
+			indexRef := [ecCOUNT]int{
+				int(mxPath), // ecMedia
+				int(sxPath), // ecSupport
+			}
+
+			// verify we've received a file of a known specific class.
+			var index int
+			if class != ecUnknown && class < ecCOUNT {
+				index = indexRef[class]
+			} else {
 				return false, fmt.Errorf("seenFile(): unrecognized class: %d", int(class))
 			}
+
+			// perform a simple database query on the appropriate table to check
+			// if we've ever seen this file before based on its absolute path.
 			result := make(map[int]struct{})
 			if err := db.EvalQuery(map[string]interface{}{
 				"eq": path,
@@ -452,6 +483,8 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 		switch kind, extName := mediaKindOfFileExt(ext); kind {
 		case mkAudio:
 
+			// select the audio database collection to determine if this is a
+			// previously-known file or if we need to insert a new entity.
 			ac := l.db.col[ecMedia][mkAudio]
 			seen, err := seenFile(l, ecMedia, int(kind), absPath)
 			if err != nil {
@@ -459,12 +492,15 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
 			}
 			if !seen {
+				// this is a legitimately unknown file, create a new AudioMedia
+				// entity and insert it into the database.
 				audio := newAudioMedia(l, absPath, relPath, ext, extName, fileInfo)
 				if rec, recErr := audio.toRecord(); nil == recErr {
 					if id, insErr := ac.Insert(*rec); nil == insErr {
 						l.db.numRecordsScan[ecMedia][kind]++
 						infoLog.tracef("discovered audio (ID={%q,%X}): %s", l.name, id, audio)
 						if nil != ph && nil != ph.handleMedia {
+							// notify the callback handler of a new AudioMedia.
 							ph.handleMedia(l, absPath, audio, id)
 						}
 					} else {
@@ -472,12 +508,15 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 							"scanDive(%q, %d): failed to insert record: %s (skipping)", dispPath, depth, insErr)
 					}
 				} else {
+					// failed to construct a new Audio object.
 					return recErr
 				}
 			}
 
 		case mkVideo:
 
+			// select the video database collection to determine if this is a
+			// previously-known file or if we need to insert a new entity.
 			vc := l.db.col[ecMedia][mkVideo]
 			seen, err := seenFile(l, ecMedia, int(kind), absPath)
 			if err != nil {
@@ -485,12 +524,15 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 					"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
 			}
 			if !seen {
+				// this is a legitimately unknown file, create a new VideoMedia
+				// entity and insert it into the database.
 				video := newVideoMedia(l, absPath, relPath, ext, extName, fileInfo)
 				if rec, recErr := video.toRecord(); nil == recErr {
 					if id, insErr := vc.Insert(*rec); nil == insErr {
 						l.db.numRecordsScan[ecMedia][kind]++
 						infoLog.tracef("discovered video (ID={%q,%X}): %s", l.name, id, video)
 						if nil != ph && nil != ph.handleMedia {
+							// notify the callback handler of a new VideoMedia.
 							ph.handleMedia(l, absPath, video, id)
 						}
 					} else {
@@ -498,6 +540,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 							"scanDive(%q, %d): failed to insert record: %s (skipping)", dispPath, depth, insErr)
 					}
 				} else {
+					// failed to construct a new Video object.
 					return recErr
 				}
 			}
@@ -508,6 +551,9 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 			// check if it is a media-supporting file.
 			switch kind, extName := supportKindOfFileExt(ext); kind {
 			case skSubtitles:
+				// select the media support database collection to determine if
+				// this is a previously-known file or if we need to insert a new
+				// entity.
 				sc := l.db.col[ecSupport][skSubtitles]
 				seen, err := seenFile(l, ecSupport, int(kind), absPath)
 				if err != nil {
@@ -515,11 +561,14 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 						"scanDive(%q, %d): failed to evaluate query: %s (skipping)", dispPath, depth, err)
 				}
 				if !seen {
+					// this is a legitimately unknown file, create a new media
+					// support entity and insert it into the database.
 					subs := newSubtitles(l, absPath, relPath, ext, extName, fileInfo)
 					if rec, recErr := subs.toRecord(); nil == recErr {
 						if id, insErr := sc.Insert(*rec); nil == insErr {
 							l.db.numRecordsScan[ecSupport][kind]++
 							infoLog.tracef("discovered subtitles (ID={%q,%X}): %s", l.name, id, subs)
+							// notify the callback handler of a new Subtitles.
 							if nil != ph && nil != ph.handleSupport {
 								ph.handleSupport(l, absPath, subs, id)
 							}
@@ -528,6 +577,7 @@ func (l *Library) scanDive(ph *PathHandler, absPath string, depth uint) *ReturnC
 								"scanDive(%q, %d): failed to insert record: %s (skipping)", dispPath, depth, insErr)
 						}
 					} else {
+						// failed to construct a new Subtitles object.
 						return recErr
 					}
 				}
@@ -568,9 +618,13 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 	// isn't already filled to capacity.
 	select {
 	case l.scanStart <- time.Now():
+
+		// notify the user that a potentially time-intensive operation has
+		// begun and user interactions will be limited.
 		if !isCLIMode {
 			l.busyState.inc()
 		}
+
 		// the write succeeded, so we can initiate scanning. keep track of the
 		// time at which we began so that the time elapsed can be calculated and
 		// notified to the user.
@@ -579,11 +633,17 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 		if nil == err {
 			l.recandidateSubtitles(false)
 		}
+
+		// we've finished the scanning operations, so remove the busy indicator
+		// to indicate that normal user interactions may resume (if no other
+		// event has the semaphore still incremented).
+		l.lastScan = time.Now()
 		l.scanElapsed = time.Since(<-l.scanStart)
 		if !isCLIMode {
 			l.busyState.dec()
 		}
 
+		// construct a summary message for the load operation.
 		total, summary := l.db.totalRecordsString(dmScan, -1, -1)
 		if total > 0 {
 			infoLog.verbosef(
@@ -595,6 +655,7 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 				l.name, l.scanElapsed.Round(time.Millisecond))
 		}
 		numScan = total
+
 	default:
 		// if the write failed, we fall back to this default case. the only
 		// reason it should fail is if the buffer is already filled to capacity,
@@ -604,5 +665,7 @@ func (l *Library) scan(handler *PathHandler) (uint, *ReturnCode) {
 			"scan(): max number of scanners reached: %q (max = %d)",
 			l.absPath, maxLibraryScanners)
 	}
+
+	// return a count of the total number of entities successfully loaded.
 	return numScan, err
 }

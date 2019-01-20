@@ -21,6 +21,9 @@ import (
 // type ReturnCodeKind identifies the different kinds of return codes.
 type ReturnCodeKind int
 
+// local unexported constants that categorize return codes into high-level
+// status groups which affect the prefix/highlighting of messages in the user's
+// output log.
 const (
 	rkInfo ReturnCodeKind = iota
 	rkWarn

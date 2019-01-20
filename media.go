@@ -35,9 +35,9 @@ const (
 	mkCOUNT                        // =  2
 )
 
-// variable mediaColName maps the MediaKind enum values to the string name of
-// their corresponding collection in the database.
 var (
+	// variable mediaColName maps the MediaKind enum values to the string name
+	// of their corresponding collection in the database.
 	mediaColName = [mkCOUNT]string{
 		"Audio", // 0 = mkAudio
 		"Video", // 1 = mkVideo

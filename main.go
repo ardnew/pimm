@@ -27,12 +27,12 @@ import (
 	"ardnew.com/goutil"
 )
 
-// unexported constants
+// unexported local constants.
 const (
 	defaultCPUProfileName = "cpu.prof"
 	defaultMEMProfileName = "mem.prof"
-	defaultConfigPath     = "config"
-	defaultLibDataPath    = "library.db"
+	defaultConfigName     = "config"
+	defaultLibDataName    = "library.db"
 )
 
 // versioning information defined by compiler switches in Makefile.
@@ -41,11 +41,36 @@ var (
 	version   string
 	revision  string
 	buildtime string
+)
 
-	// synonyms of "good" for function greeting()
-	adjGood = [...]string{"an acceptable", "an excellent", "an exceptional", "a favorable", "a great", "a marvelous", "a positive", "a satisfactory", "a satisfying", "a superb", "a valuable", "a wonderful", "an ace", "a boss", "a bully", "a capital", "a choice", "a crack", "a nice", "a pleasing", "a prime", "a rad", "a sound", "a spanking", "a sterling", "a super", "a superior", "a welcome", "a worthy", "an admirable", "an agreeable", "a commendable", "a congenial", "a deluxe", "a first-class", "a first-rate", "a gnarly", "a gratifying", "a honorable", "a neat", "a precious", "a recherché", "a reputable", "a select", "a shipshape", "a splendid", "a stupendous", "a super-eminent", "a super-excellent", "a tip-top", "an up to snuff"}
-	// synonyms of "bad" for function greeting()
-	adjBad = [...]string{"an atrocious", "a bad", "an awful", "a cheap", "a crummy", "a dreadful", "a lousy", "a poor", "a rough", "a sad", "an unacceptable", "a blah", "a bummer", "a diddly", "a downer", "a garbage", "a gross", "an imperfect", "an inferior", "a junky", "a synthetic", "an abominable", "an amiss", "a bad news", "a beastly", "a bottom out", "a careless", "a cheesy", "a crappy", "a cruddy", "a defective", "a deficient", "a dissatisfactory", "an erroneous", "a fallacious", "a faulty", "a godawful", "a grody", "a grungy", "an icky", "an inadequate", "an incorrect", "a not good", "an off", "a raunchy", "a slipshod", "a stinking", "a substandard", "an unsatisfactory"}
+// adjectives used to construct the dynamic quit message in function greeting().
+var (
+	adjGood = [...]string{
+		"an acceptable", "an excellent", "an exceptional", "a favorable",
+		"a great", "a marvelous", "a positive", "a satisfactory",
+		"a satisfying", "a superb", "a valuable", "a wonderful", "an ace",
+		"a boss", "a bully", "a capital", "a choice", "a crack", "a nice",
+		"a pleasing", "a prime", "a rad", "a sound", "a spanking", "a sterling",
+		"a super", "a superior", "a welcome", "a worthy", "an admirable",
+		"an agreeable", "a commendable", "a congenial", "a deluxe",
+		"a first-class", "a first-rate", "a gnarly", "a gratifying",
+		"a honorable", "a neat", "a precious", "a recherché", "a reputable",
+		"a select", "a shipshape", "a splendid", "a stupendous",
+		"a super-eminent", "a super-excellent", "a tip-top", "an up to snuff",
+	}
+	adjBad = [...]string{
+		"an atrocious", "a bad", "an awful", "a cheap", "a crummy",
+		"a dreadful", "a lousy", "a poor", "a rough", "a sad",
+		"an unacceptable", "a blah", "a bummer", "a diddly", "a downer",
+		"a garbage", "a gross", "an imperfect", "an inferior", "a junky",
+		"a synthetic", "an abominable", "an amiss", "a bad news", "a beastly",
+		"a bottom out", "a careless", "a cheesy", "a crappy", "a cruddy",
+		"a defective", "a deficient", "a dissatisfactory", "an erroneous",
+		"a fallacious", "a faulty", "a godawful", "a grody", "a grungy",
+		"an icky", "an inadequate", "an incorrect", "a not good", "an off",
+		"a raunchy", "a slipshod", "a stinking", "a substandard",
+		"an unsatisfactory",
+	}
 )
 
 // various globals available to all units.
@@ -108,12 +133,17 @@ func (i *TimeInterval) contains(t time.Time) bool {
 }
 
 // function greeting() generates a random adjective (synonym of "good" or "bad")
-// followed by a nominal time of day using the actual/current system time.
+// followed by a nominal time of day using the actual current system time.
 // e.g. "a crummy evening", or "a splendid morning"
 func greeting() string {
 
+	// first retrieve the current system time and convert it to a Date object.
 	n := time.Now()
 	d := time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location())
+
+	// next, randomly select a "good" or "bad" adjective using the low bit of
+	// the current second of the current time; and then, randomly select one of
+	// the elements of the respective adjective array.
 	rand.Seed(n.UnixNano())
 	var s, t string
 	if (n.Second() & 1) == 1 {
@@ -122,31 +152,32 @@ func greeting() string {
 		s = adjBad[rand.Intn(len(adjBad))]
 	}
 
-	ne := &TimeInterval{d.Add(time.Hour * 00), d.Add(time.Hour * 05), "night"}     // 12AM-04:59:59AM
-	mo := &TimeInterval{d.Add(time.Hour * 05), d.Add(time.Hour * 12), "morning"}   // 05AM-11:59:59AM
-	af := &TimeInterval{d.Add(time.Hour * 12), d.Add(time.Hour * 17), "afternoon"} // 12PM-04:59:59PM
-	ev := &TimeInterval{d.Add(time.Hour * 17), d.Add(time.Hour * 22), "evening"}   // 05PM-09:59:59PM
-	nl := &TimeInterval{d.Add(time.Hour * 22), d.Add(time.Hour * 24), "night"}     // 10PM-11:59:59PM
-
-	if ne.contains(n) || nl.contains(n) {
-		t = ne.desc
-	}
-	if mo.contains(n) {
-		t = mo.desc
-	}
-	if af.contains(n) {
-		t = af.desc
-	}
-	if ev.contains(n) {
-		t = ev.desc
+	// lastly, check which time interval our current time is in to decide which
+	// general time of day to describe.
+	for _, ti := range []*TimeInterval{
+		&TimeInterval{d.Add(time.Hour * 00), d.Add(time.Hour * 05), "night"},     // 12AM-04:59:59AM
+		&TimeInterval{d.Add(time.Hour * 05), d.Add(time.Hour * 12), "morning"},   // 05AM-11:59:59AM
+		&TimeInterval{d.Add(time.Hour * 12), d.Add(time.Hour * 17), "afternoon"}, // 12PM-04:59:59PM
+		&TimeInterval{d.Add(time.Hour * 17), d.Add(time.Hour * 22), "evening"},   // 05PM-09:59:59PM
+		&TimeInterval{d.Add(time.Hour * 22), d.Add(time.Hour * 24), "night"},     // 10PM-11:59:59PM
+	} {
+		if ti.contains(n) {
+			t = ti.desc
+			break
+		}
 	}
 
+	// concatenate the result, ???, PROFIT
 	return fmt.Sprintf("quitting, have %s %s!", s, t)
 }
 
-// function main() is the program entry point, obviously.
+// function main() is the program entry point, obviously :)
 func main() {
 
+	// primary panic handler for the main thread. this is the last point at
+	// which we can recover before terminating the entire process. the normal
+	// exit case is also handled here for completeness. see the ReturnCode
+	// switch cases to see how special case exit cleanup is implemented.
 	defer func() {
 		if r := recover(); nil != r {
 			switch r.(type) {
@@ -168,15 +199,18 @@ func main() {
 	}()
 
 	var busyState *BusyState = newBusyState()
-	var layout *Layout = nil
 	var initComplete chan bool = make(chan bool)
 
-	// parse options and command line arguments.
+	// first things first, parse options and command line arguments which can
+	// influence the operating modes of the program from a very high level.
 	options, err := initOptions()
 	if nil != err {
+		// immediately terminate if we don't understand the runtime options.
 		panic(err)
 	}
 
+	// if the user provided a log file, redirect all output to that file instead
+	// of the default of STDOUT (or our LogView when running in TUI mode).
 	logPath, isLogPathProvided := options.Provided[options.LogPath.name]
 	if isLogPathProvided {
 		of, err := os.Create(logPath.string)
@@ -258,16 +292,31 @@ func main() {
 		panic(rcInvalidConfig.spec("no valid libraries provided"))
 	}
 
+	// dispatch a goroutine that will listen for the database and file system
+	// media discovery goroutines to finish (scanComplete will only be written
+	// to once both the load and scan operations have completed).
 	scanStart := time.Now()
 	go func(lib []*Library, start time.Time) {
 
 		var numFound uint = 0
 		for _, l := range lib {
+			// block this goroutine until each library has written to their
+			// respective channel. the order in which we receive this channel
+			// data is irrelevant.
 			numFound += (<-l.scanComplete).(uint)
 		}
 		scanElapsed := time.Since(start)
 		infoLog.logf("initialization complete (%d ~things~ found in %s)",
 			numFound, scanElapsed.Round(time.Millisecond))
+
+		// the only purpose of this channel is to safely handle the transition
+		// from the initial CLI mode to the ncurses TUI mode by displaying
+		// status information to the appropriate interface. if this channel is
+		// still empty by the time we have our ncurses interface shown, then all
+		// prior log/status messages have been obscured by the UI. so we want to
+		// give an update to convince the user we are still working on it. this
+		// determination is made by the select-true block below with a default
+		// case that is selected when initComplete is empty.
 		initComplete <- true
 
 	}(library, scanStart)
@@ -279,7 +328,7 @@ func main() {
 	// progress indicators and anything else the user can get away with while
 	// the scanners/loaders work.
 	if !isCLIMode {
-		layout = newLayout(options, busyState, library...)
+		layout := newLayout(options, busyState, library...)
 		// associate the loggers with the navigable log viewer.
 		if !isLogPathProvided {
 			setWriterAll(layout.logView)
@@ -326,6 +375,9 @@ func main() {
 // of the program's supporting configuration data. if the user has defined a
 // specific config file (via -config arg), then use the _logical_ parent
 // directory of that file path; otherwise, use the default path "~/.<identity>".
+// -----------------------------------------------------------------------------
+//  TODO: construct a more conventional path for Windows hosts.
+// -----------------------------------------------------------------------------
 func (o *Options) configDir() string {
 	if nil == o {
 		return filepath.Join(homeDir(), fmt.Sprintf(".%s", identity))
@@ -380,8 +432,9 @@ func initOptions() (options *Options, err *ReturnCode) {
 		}
 	}()
 
-	configPath := filepath.Join(options.configDir(), defaultConfigPath)
-	libDataPath := filepath.Join(options.configDir(), defaultLibDataPath)
+	// by default,
+	configPath := filepath.Join(options.configDir(), defaultConfigName)
+	libDataPath := filepath.Join(options.configDir(), defaultLibDataName)
 
 	// define the option properties that the command line parser recognizes.
 	options = &Options{
@@ -556,8 +609,7 @@ func initLibrary(options *Options, busyState *BusyState) []*Library {
 }
 
 // function populateLibrary() spawns goroutines to scan each library
-// concurrently. it also spawns goroutines that listen via channels for new
-// media discovered (see function watchLibrary() for handlers).
+// concurrently.
 func populateLibrary(options *Options, library []*Library) {
 
 	// for each library, dispatch a pair (2) goroutines in the following order:
