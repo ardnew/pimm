@@ -33,7 +33,7 @@ const (
 )
 
 var (
-	idleUpdateFreq time.Duration = 1 * time.Second
+	idleUpdateFreq time.Duration = 30 * time.Second
 	busyUpdateFreq time.Duration = 100 * time.Millisecond
 )
 
@@ -196,6 +196,16 @@ type Layout struct {
 // function show() starts drawing the user interface.
 func (l *Layout) show() *ReturnCode {
 
+	// zeroized Time is some time in the distant past.
+	lastUpdate := time.Time{}
+
+	// queues a screen refresh on the tview event queue and updates the time
+	// marker representing the last moment in time we updated.
+	redraw := func(f func()) {
+		l.ui.QueueUpdateDraw(f)
+		lastUpdate = time.Now()
+	}
+
 	// timer forcing the app to redraw any areas that may have changed. this
 	// update frequency is dynamic -- more frequent while the "Busy" indicator
 	// is active, less frequent while it isn't.
@@ -205,6 +215,8 @@ func (l *Layout) show() *ReturnCode {
 		// caution.
 		updateFreq := busyUpdateFreq
 
+		// updates the currently selected refresh rate only if the requested
+		// rate is different from the current.
 		setFreq := func(curr, freq *time.Duration) bool {
 			if *curr != *freq {
 				*curr = *freq
@@ -213,27 +225,69 @@ func (l *Layout) show() *ReturnCode {
 			return false
 		}
 
+		// let's see if i can describe this. lots of nested loops, lots of break
+		// statements, not particularly intuitive. most of these loops are
+		// infinite and unconditional and serve primarily to poll channels at
+		// regular intervals. i'll describe each loop at the level it appears.
+
+		// this outer-most loop simply provides a mechanism to reset the ticker,
+		// so that the refresh rate can be changed dynamically:
+		//   1. create a ticker with the currently selected frequency
+		//   2. start infinite loop, breaking out -only-if- frequency changed.
+		//   3. dispose of ticker, return to 1 (we can only reach here if the
+		//      frequency changed, breaking out of the outer loop).
 		for {
 			tick := time.NewTicker(updateFreq)
 		REFRESH:
+			// this is the actual main draw cycle, iterating only as frequently
+			// as our currently selected tick duration -- which should be longer
+			// if we are idle, shorter if we are busy and constantly redrawing.
 			for {
 				select {
+
 				case <-tick.C:
 				DRAIN:
-					for {
+					// at each fired tick event, check if we've added any events
+					// to our private internal event queue. if so, immediately
+					// pull out -all- events, process them, and then perform a
+					// single screen draw refresh. this prevents flicker and
+					// ensures all updates get handled without starving out all
+					// other goroutines.
+					for eventsHandled := 0; ; {
 						select {
 						case event := <-l.eventQueue:
+							// we have an event in the queue, so inc the counter
+							// to indicate we will need to redraw the screen.
 							if event != nil {
+								eventsHandled++
 								event()
 							}
 						default:
-							l.ui.QueueUpdateDraw(func() {})
+							// if nothing in the queue, then this for-loop will
+							// have its body evaluated only a single time each
+							// draw cycle to then break out and check again.
+
+							// we need to redraw the screen because a change was
+							// made to one of the primitives.
+							shouldDrawForEvent := eventsHandled > 0
+							// we need to redraw the screen because
+							shouldDrawForTimeout := time.Since(lastUpdate) > idleUpdateFreq
+							if shouldDrawForEvent || shouldDrawForTimeout {
+								redraw(func() {})
+							}
 							break DRAIN
 						}
 					}
 
 				case count := <-l.busy.changed:
-					l.ui.QueueUpdateDraw(func() {})
+					// if the frequency changed, perform one last screen refresh
+					// before updating the draw cycle duration. the duration is
+					// selected based on the number of goroutines which have
+					// incremented the BusyState semaphore. if non-zero, then we
+					// have active goroutines and need to frequently redraw the
+					// screen. otherwise, we are basically idle and only need to
+					// redraw occassionally.
+					redraw(func() {})
 					// use setFreq() so that we kill the Ticker and alloc a new
 					// one if and only if the duration actually changed.
 					switch count {
@@ -246,35 +300,30 @@ func (l *Layout) show() *ReturnCode {
 							break REFRESH
 						}
 					}
+
+				// signal monitor for refocus requests. when an event occurs
+				// that requires a new widget to be focused, this routine will
+				// call the interface-compliant widgets' event handlers to
+				// blur() and focus() the old and new widgets, respectively.
+				case delegate := <-l.focusQueue:
+					if delegate != nil {
+						l.focusLock.Lock()
+						if delegate != l.focused {
+							if l.focused != nil {
+								l.focused.blur()
+							}
+							delegate.focus()
+							// update afterwards so that the focus() method can
+							// make decisions based on which was previously
+							// focused.
+							l.focused = delegate
+						}
+						l.focusLock.Unlock()
+						redraw(func() {})
+					}
 				}
 			}
 			tick.Stop()
-		}
-	}(l)
-
-	// signal monitor for refocus requests. when an event occurs that requires a
-	// new widget to be focused, this routine will call the interface-compliant
-	// widgets' event handlers to blur() and focus() the old and new widgets,
-	// respectively.
-	go func(l *Layout) {
-		for {
-			select {
-			case delegate := <-l.focusQueue:
-				if delegate != nil {
-					l.focusLock.Lock()
-					if delegate != l.focused {
-						if l.focused != nil {
-							l.focused.blur()
-						}
-						delegate.focus()
-						// update afterwards so that the focus() method can make
-						// decisions based on which was previously focused.
-						l.focused = delegate
-					}
-					l.focusLock.Unlock()
-					l.ui.Draw()
-				}
-			}
 		}
 	}(l)
 
@@ -594,7 +643,7 @@ func (l *Layout) drawStatusBar(screen tcell.Screen, x int, y int, width int, hei
 	}
 
 	//dateTime := time.Now().Format("[15:04:05] Monday, January 02, 2006")
-	dateTime := time.Now().Format("2006/01/02 15:04:05")
+	dateTime := time.Now().Format("2006/01/02 03:04 PM")
 
 	// Write some text along the horizontal line.
 	tview.Print(screen, dateTime, x+3, y, width, tview.AlignLeft, colorScheme.highlightSecondary)
