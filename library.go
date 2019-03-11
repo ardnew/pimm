@@ -38,7 +38,7 @@ type Library struct {
 
 	busyState *BusyState // reference to the global busy state mutex
 
-	layout *Layout // reference to the primary text user interface (TUI)
+	tui *TUI // reference to the primary text user interface (TUI)
 
 	loadComplete chan interface{} // synchronization lock
 	loadStart    chan time.Time   // counting semaphore to limit number of concurrent loaders
@@ -185,9 +185,9 @@ func newLibrary(opt *Options, busy *BusyState, lib string, lim uint, curr []*Lib
 		// system resources such as database tables, UI primitives, etc.
 		busyState: busy,
 
-		// we will not necessarily have a layout reference in the event that the
+		// we will not necessarily have a TUI reference in the event that the
 		// user is running in CLI mode, so keep nil by default.
-		layout: nil,
+		tui: nil,
 
 		loadComplete: make(chan interface{}),
 		loadStart:    make(chan time.Time, maxLibraryScanners),

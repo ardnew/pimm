@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"sync/atomic"
 	"time"
 
 	"ardnew.com/goutil"
@@ -39,6 +40,7 @@ const (
 var (
 	identity  string
 	version   string
+	branch    string
 	revision  string
 	buildtime string
 )
@@ -72,6 +74,76 @@ var (
 		"an unsatisfactory",
 	}
 )
+
+// type BusyState keeps track of the number of goroutines that are wishing to
+// indicate to the UI that they are active or busy, that the user should hold
+// their horses.
+type BusyState struct {
+	changed   chan uint64 // signal when busy state changes
+	_         uintptr     // padding, 64-bit atomic ops must be performed on 8-byte boundaries (see go1.10 sync/atomic bugs)
+	busyCount uint64      // number of busy goroutines
+	busyCycle uint64      // number of UI updates performed while busy
+}
+
+// function newBusyState() instantiates a new BusyState object with zeroized
+// counter and update cycle.
+func newBusyState() *BusyState {
+	return &BusyState{
+		changed:   make(chan uint64),
+		busyCount: 0,
+		busyCycle: 0,
+	}
+}
+
+// function count() safely returns the number of goroutines currently declaring
+// themselves as busy.
+func (s *BusyState) count() int {
+	count := atomic.LoadUint64(&s.busyCount)
+	return int(count)
+}
+
+// function inc() safely increments the number of goroutines currently declaring
+// themselves as busy by 1.
+func (s *BusyState) inc() int {
+	newCount := atomic.AddUint64(&s.busyCount, 1)
+	s.changed <- newCount
+	// reset the cycle if we were not busy before this increment
+	if 1 == newCount {
+		s.reset()
+	}
+	return int(newCount)
+}
+
+// function dec() safely decrements the number of goroutines currently declaring
+// themselves as busy by 1.
+func (s *BusyState) dec() int {
+	newCount := atomic.AddUint64(&s.busyCount, ^uint64(0))
+	s.changed <- newCount
+	// reset the cycle if we are not busy after this increment
+	if 0 == newCount {
+		s.reset()
+	}
+	return int(newCount)
+}
+
+// function cycle() returns the number of iterations that have elapsed since the
+// the beginning of the current busy state (returns 0 if not busy).
+func (s *BusyState) cycle() int {
+	cycle := atomic.LoadUint64(&s.busyCycle)
+	return int(cycle)
+}
+
+// function next() safely increments by 1 the UI cycles elapsed since the
+// current busy state was initiated.
+func (s *BusyState) next() int {
+	cycle := atomic.AddUint64(&s.busyCycle, 1)
+	return int(cycle)
+}
+
+// function reset() safely resets the current UI cycles elapsed to 0.
+func (s *BusyState) reset() {
+	atomic.StoreUint64(&s.busyCycle, 0)
+}
 
 // various globals available to all units.
 var (
@@ -302,7 +374,7 @@ func main() {
 		for _, l := range lib {
 			// block this goroutine until each library has written to their
 			// respective channel. the order in which we receive this channel
-			// data is irrelevant.
+			// data is irrelevant because they -all- must complete.
 			numFound += (<-l.scanComplete).(uint)
 		}
 		scanElapsed := time.Since(start)
@@ -328,10 +400,10 @@ func main() {
 	// progress indicators and anything else the user can get away with while
 	// the scanners/loaders work.
 	if !isCLIMode {
-		layout := newLayout(options, busyState, library...)
+		//layout := newLayout(options, busyState, library...)
 		// associate the loggers with the navigable log viewer.
 		if !isLogPathProvided {
-			setWriterAll(layout.logView)
+			//setWriterAll(layout.logView)
 		}
 		select {
 		case <-initComplete:
@@ -345,9 +417,9 @@ func main() {
 			// working on it.
 			infoLog.logf("still initializing library databases ...")
 		}
-		if errCode := layout.show(); nil != errCode {
-			panic(errCode)
-		}
+		//if errCode := layout.show(); nil != errCode {
+		//	panic(errCode)
+		//}
 	} else {
 		<-initComplete
 	}
@@ -547,7 +619,7 @@ func initOptions() (options *Options, err *ReturnCode) {
 
 	// the output provided with -help or when a option parse error occurred.
 	options.Usage = func() {
-		rawLog.logf("%s v%s (%s) [%s]", identity, version, revision, buildtime)
+		rawLog.logf("%s v%s (%s@%s) [%s]", identity, version, branch, revision, buildtime)
 		rawLog.log()
 		options.SetOutput(os.Stdout)
 		options.PrintDefaults()
@@ -612,17 +684,17 @@ func initLibrary(options *Options, busyState *BusyState) []*Library {
 // concurrently.
 func populateLibrary(options *Options, library []*Library) {
 
-	// for each library, dispatch a pair (2) goroutines in the following order:
-	//   2. dump all of the content from the library's database, verifying it
+	// for each library, dispatch a pair (2) of goroutines in order:
+	//   1. dump all of the content from the library's database, verifying it
 	//       and notifying the discovery channels;
-	//   3. recursively traverse the library's filesystem, identifying which
+	//   2. recursively traverse the library's filesystem, identifying which
 	//       content is valid and desirable, then notify the discovery channels
 	//       accordingly.
 	for _, lib := range library {
 
-		// 2. pull all of the media already known to exist in the library from
-		//    the local database, verify it still exists, then notify the
-		//     channel.
+		// 1. pull all of the media already known to exist in the library from
+		//    the local database, verify it still exists, and then notify via
+		//    provided callback handler.
 		go func(l *Library) {
 			var numMedia uint = 0
 			if !l.db.isFirstAppearance() {
@@ -631,18 +703,18 @@ func populateLibrary(options *Options, library []*Library) {
 						// the loader identified some file in a subdirectory of
 						// the library's file system as a media file.
 						handleMedia: func(l *Library, p string, v ...interface{}) {
-							disco := newDiscovery(v...)
+							//disco := newDiscovery(v...)
 							if !isCLIMode {
-								l.layout.addDiscovery(l, disco)
+								//l.layout.addDiscovery(l, disco)
 							}
 						},
 						// the loader identified some file in a subdirectory of
 						// the library's file system as a supporting auxiliary
 						// file to a known or as-of-yet unknown media file.
 						handleSupport: func(l *Library, p string, v ...interface{}) {
-							disco := newDiscovery(v...)
+							//disco := newDiscovery(v...)
 							if !isCLIMode {
-								l.layout.addDiscovery(l, disco)
+								//l.layout.addDiscovery(l, disco)
 							}
 						},
 						// the loader identified some file in a subdirectory of
@@ -659,8 +731,8 @@ func populateLibrary(options *Options, library []*Library) {
 			l.loadComplete <- numMedia
 		}(lib)
 
-		// 3. recursively walks a library's file system, notifying the library's
-		//    signal channels whenever any sort of content is found.
+		// 2. recursively walks a library's file system, notifying the provided
+		//    callback handler whenever any sort of content is found.
 		go func(l *Library) {
 			// postpone the scanning until the load routine has completed.
 			var numMedia uint = (<-l.loadComplete).(uint)
@@ -669,18 +741,18 @@ func populateLibrary(options *Options, library []*Library) {
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as a media file.
 					handleMedia: func(l *Library, p string, v ...interface{}) {
-						disco := newDiscovery(v...)
+						//disco := newDiscovery(v...)
 						if !isCLIMode {
-							l.layout.addDiscovery(l, disco)
+							//l.layout.addDiscovery(l, disco)
 						}
 					},
 					// the scanner identified some file in a subdirectory of the
 					// library's file system as a supporting auxiliary file to a
 					// known or as-of-yet unknown media file.
 					handleSupport: func(l *Library, p string, v ...interface{}) {
-						disco := newDiscovery(v...)
+						//disco := newDiscovery(v...)
 						if !isCLIMode {
-							l.layout.addDiscovery(l, disco)
+							//l.layout.addDiscovery(l, disco)
 						}
 					},
 					// the scanner identified some file in a subdirectory of the

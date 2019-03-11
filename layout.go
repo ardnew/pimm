@@ -19,7 +19,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -32,40 +31,40 @@ const (
 	logRowsHeight   = 6 // number of visible log lines + 1
 )
 
-var (
-	idleUpdateFreq time.Duration = 30 * time.Second
-	busyUpdateFreq time.Duration = 100 * time.Millisecond
-)
-
-var (
-	// the term "interactive" is used to mean an item has a dedicated, keyboard-
-	// driven key combo, so that it behaves much like a button.
-	colorScheme = struct {
-		backgroundPrimary   tcell.Color // main background color
-		backgroundSecondary tcell.Color // background color of modal windows
-		backgroundTertiary  tcell.Color // background of dropdown menus, etc.
-		inactiveText        tcell.Color // non-interactive info, secondary or unfocused
-		activeText          tcell.Color // non-interactive info, primary or focused
-		inactiveMenuText    tcell.Color // unselected interactive text
-		activeMenuText      tcell.Color // selected interactive text
-		activeBorder        tcell.Color // border of active/modal views
-		highlightPrimary    tcell.Color // active selections and prominent indicators
-		highlightSecondary  tcell.Color // dynamic persistent status info
-		highlightTertiary   tcell.Color // dynamic temporary status info
-	}{
-		backgroundPrimary:   tcell.ColorBlack,
-		backgroundSecondary: tcell.ColorDarkSlateGray,
-		backgroundTertiary:  tcell.ColorSkyblue,
-		inactiveText:        tcell.ColorDarkSlateGray,
-		activeText:          tcell.ColorWhiteSmoke,
-		inactiveMenuText:    tcell.ColorSkyblue,
-		activeMenuText:      tcell.ColorDodgerBlue,
-		activeBorder:        tcell.ColorSkyblue,
-		highlightPrimary:    tcell.ColorDarkOrange,
-		highlightSecondary:  tcell.ColorDodgerBlue,
-		highlightTertiary:   tcell.ColorGreenYellow,
-	}
-)
+//var (
+//	idleUpdateFreq time.Duration = 30 * time.Second
+//	busyUpdateFreq time.Duration = 100 * time.Millisecond
+//)
+//
+//var (
+//	// the term "interactive" is used to mean an item has a dedicated, keyboard-
+//	// driven key combo, so that it behaves much like a button.
+//	colorScheme = struct {
+//		backgroundPrimary   tcell.Color // main background color
+//		backgroundSecondary tcell.Color // background color of modal windows
+//		backgroundTertiary  tcell.Color // background of dropdown menus, etc.
+//		inactiveText        tcell.Color // non-interactive info, secondary or unfocused
+//		activeText          tcell.Color // non-interactive info, primary or focused
+//		inactiveMenuText    tcell.Color // unselected interactive text
+//		activeMenuText      tcell.Color // selected interactive text
+//		activeBorder        tcell.Color // border of active/modal views
+//		highlightPrimary    tcell.Color // active selections and prominent indicators
+//		highlightSecondary  tcell.Color // dynamic persistent status info
+//		highlightTertiary   tcell.Color // dynamic temporary status info
+//	}{
+//		backgroundPrimary:   tcell.ColorBlack,
+//		backgroundSecondary: tcell.ColorDarkSlateGray,
+//		backgroundTertiary:  tcell.ColorSkyblue,
+//		inactiveText:        tcell.ColorDarkSlateGray,
+//		activeText:          tcell.ColorWhiteSmoke,
+//		inactiveMenuText:    tcell.ColorSkyblue,
+//		activeMenuText:      tcell.ColorDodgerBlue,
+//		activeBorder:        tcell.ColorSkyblue,
+//		highlightPrimary:    tcell.ColorDarkOrange,
+//		highlightSecondary:  tcell.ColorDodgerBlue,
+//		highlightTertiary:   tcell.ColorGreenYellow,
+//	}
+//)
 
 func init() {
 	// color overrides for the primitives initialized by tview
@@ -77,76 +76,6 @@ func init() {
 
 func busyMessage(intent string) string {
 	return fmt.Sprintf("(not ready) please wait until the current operation completes to %s.", intent)
-}
-
-// type BusyState keeps track of the number of goroutines that are wishing to
-// indicate to the UI that they are active or busy, that the user should hold
-// their horses.
-type BusyState struct {
-	changed   chan uint64 // signal when busy state changes
-	_         uintptr     // padding, 64-bit atomic ops must be performed on 8-byte boundaries (see go1.10 sync/atomic bugs)
-	busyCount uint64      // number of busy goroutines
-	busyCycle uint64      // number of UI updates performed while busy
-}
-
-// function newBusyState() instantiates a new BusyState object with zeroized
-// counter and update cycle.
-func newBusyState() *BusyState {
-	return &BusyState{
-		changed:   make(chan uint64),
-		busyCount: 0,
-		busyCycle: 0,
-	}
-}
-
-// function count() safely returns the current number of goroutines currently
-// declaring themselves as busy.
-func (s *BusyState) count() int {
-	count := atomic.LoadUint64(&s.busyCount)
-	return int(count)
-}
-
-// function inc() safely increments the number of goroutines currently declaring
-// themselves as busy by 1.
-func (s *BusyState) inc() int {
-	newCount := atomic.AddUint64(&s.busyCount, 1)
-	s.changed <- newCount
-	// reset the cycle if we were not busy before this increment
-	if 1 == newCount {
-		s.reset()
-	}
-	return int(newCount)
-}
-
-// function dec() safely decrements the number of goroutines currently declaring
-// themselves as busy by 1.
-func (s *BusyState) dec() int {
-	newCount := atomic.AddUint64(&s.busyCount, ^uint64(0))
-	s.changed <- newCount
-	// reset the cycle if we are not busy after this increment
-	if 0 == newCount {
-		s.reset()
-	}
-	return int(newCount)
-}
-
-// function count() safely returns the current number of goroutines currently
-// declaring themselves as busy.
-func (s *BusyState) cycle() int {
-	cycle := atomic.LoadUint64(&s.busyCycle)
-	return int(cycle)
-}
-
-// function next() safely increments by 1 the UI cycles elapsed since the
-// current busy state was initiated.
-func (s *BusyState) next() int {
-	cycle := atomic.AddUint64(&s.busyCycle, 1)
-	return int(cycle)
-}
-
-// function reset() safely resets the current UI cycles elapsed to 0.
-func (s *BusyState) reset() {
-	atomic.StoreUint64(&s.busyCycle, 0)
 }
 
 // type FocusDelegator defines the methods that must exist for any widget or
@@ -431,9 +360,9 @@ func newLayout(opt *Options, busy *BusyState, lib ...*Library) *Layout {
 	}
 
 	// add a ref to this layout object to all libraries
-	for _, l := range lib {
-		l.layout = &layout
-	}
+	//for _, l := range lib {
+	//	l.layout = &layout
+	//}
 
 	// set the initial page displayed when application begins
 	pages.SwitchToPage(layout.pagesRoot)

@@ -19,8 +19,23 @@ dbgarg-climode = -cli
 # -- define version info with version control ----------------------------------
 
 version   = 0.1
-revision  = r$(shell svn info| \grep -oP '^Revision:\s*\K\d+')
+branch    = $(shell git symbolic-ref --short HEAD)
+revision  = $(shell git rev-parse --short HEAD)
 buildtime = $(shell date -u '+%FT%TZ')
+
+#
+# something not working with the following, the subshell expansions come back as
+# empty strings when being passed to printf for some reason...?
+#
+#$(shell \
+#  if git rev-parse --is-inside-work-tree >/dev/null 2>&1 ; then \
+#    printf "%s@%s" "$(git symbolic-ref --short -q HEAD)" "$(git rev-parse --short HEAD)" ; \
+#  elif svn info >/dev/null 2>&1 ; then \
+#    printf "r%s" "$(svn info | command grep -oP '^Revision:\s*\K\d+')" ; \
+#  else \
+#    printf "(unversioned)" ; \
+#  fi \
+#)
 
 # -- other configuration for test/eval environment -----------------------------
 
@@ -42,7 +57,7 @@ gcflags         = all='-N -l'
 
 # -- linker flags (see: go tool link -help) ------------------------------------
 
-ldflags-version = -X "main.identity=$(project)" -X "main.version=$(version)" -X "main.revision=$(revision)" -X "main.buildtime=$(buildtime)"
+ldflags-version = -X "main.identity=$(project)" -X "main.version=$(version)" -X "main.branch=$(branch)" -X "main.revision=$(revision)" -X "main.buildtime=$(buildtime)"
 ldflags-release = '-w -s $(ldflags-version)'
 ldflags         = '$(ldflags-version)'
 
